@@ -64,6 +64,17 @@ Dự án xây dựng hệ thống nhận diện và chấm bài trắc nghiệm 
 Image-based-Grading-System/
 ├── Ke_Hoach_De_Tai_OMR_Nhom4.md     # Đề cương chi tiết & Kế hoạch đồ án Nhóm 4
 ├── README.md                        # Hướng dẫn tổng quan toàn dự án
+├── OMR_System_TV2/                  # Không gian làm việc & Module của Thành viên 2 (Nắn phối cảnh & Marker)
+│   ├── README.md                    # Hướng dẫn kỹ thuật TV2
+│   ├── tv2_perspective.py           # Thuật toán Homography SVD, Bilinear Warping & NCC
+│   └── test_tv2.py                  # Bộ kiểm thử TV2
+├── OMR_System_TV3/                  # Không gian làm việc & Module của Thành viên 3 (Phân đoạn & Ô tô)
+│   ├── README.md                    # Hướng dẫn kỹ thuật TV3
+│   ├── requirements.txt             # Thư viện phụ thuộc
+│   ├── src/                         # Mã nguồn Scratch (Otsu, Adaptive Mean, Morphology, CCL, Classifier)
+│   ├── tests/                       # 69 Unit Tests kiểm thử toàn diện
+│   ├── reports/                     # Báo cáo kỹ thuật chi tiết
+│   └── outputs/tv3/                 # Ảnh các bước xử lý trung gian & file kết quả CSV/JSON
 └── OMR_System_TV4/                  # Không gian làm việc & Module của Thành viên 4
     ├── app.py                       # Giao diện Web tương tác Streamlit (4 Tab đầy đủ)
     ├── run_demo.py                  # Script CLI kiểm thử & in bảng số liệu benchmark

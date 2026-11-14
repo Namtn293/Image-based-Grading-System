@@ -1,0 +1,5 @@
+Giai_doan,MSE,PSNR_dB,IoU_percent,Dice_percent,Latency_Scratch_ms,Latency_OpenCV_ms
+Thresholding,0.0,999.0,100.0,100.0,67.11619999987306,13.233
+Morphology,0.0,999.0,100.0,100.0,76.25180000013643,2.571
+Two_Pass_CCL,-,-,-,-,162.97320000012405,9.68
+Total_Pipeline,-,-,-,-,320.35480000013195,25.541

@@ -1,0 +1,716 @@
+{
+    "num_questions": 20,
+    "summary": {
+        "VALID": 15,
+        "BLANK": 2,
+        "ERASED_VALID": 2,
+        "MULTIPLE_INVALID": 1
+    },
+    "answers_vector": {
+        "1": "A",
+        "2": "B",
+        "3": "C",
+        "4": "D",
+        "5": null,
+        "6": "B",
+        "7": "A",
+        "8": "C",
+        "9": "D",
+        "10": "A",
+        "11": "B",
+        "12": null,
+        "13": "C",
+        "14": "D",
+        "15": null,
+        "16": "B",
+        "17": "C",
+        "18": "D",
+        "19": "A",
+        "20": "B"
+    },
+    "questions_detail": {
+        "1": {
+            "question_id": 1,
+            "selected": "A",
+            "status": "VALID",
+            "is_valid": true,
+            "fill_ratios": {
+                "A": 1.0,
+                "B": 0.0,
+                "C": 0.0,
+                "D": 0.0
+            },
+            "delta_tau": 1.0,
+            "sorted_options": [
+                [
+                    "A",
+                    1.0
+                ],
+                [
+                    "B",
+                    0.0
+                ],
+                [
+                    "C",
+                    0.0
+                ],
+                [
+                    "D",
+                    0.0
+                ]
+            ],
+            "warning": null
+        },
+        "2": {
+            "question_id": 2,
+            "selected": "B",
+            "status": "VALID",
+            "is_valid": true,
+            "fill_ratios": {
+                "A": 0.0,
+                "B": 1.0,
+                "C": 0.0,
+                "D": 0.0
+            },
+            "delta_tau": 1.0,
+            "sorted_options": [
+                [
+                    "B",
+                    1.0
+                ],
+                [
+                    "A",
+                    0.0
+                ],
+                [
+                    "C",
+                    0.0
+                ],
+                [
+                    "D",
+                    0.0
+                ]
+            ],
+            "warning": null
+        },
+        "3": {
+            "question_id": 3,
+            "selected": "C",
+            "status": "VALID",
+            "is_valid": true,
+            "fill_ratios": {
+                "A": 0.0,
+                "B": 0.0,
+                "C": 1.0,
+                "D": 0.0
+            },
+            "delta_tau": 1.0,
+            "sorted_options": [
+                [
+                    "C",
+                    1.0
+                ],
+                [
+                    "A",
+                    0.0
+                ],
+                [
+                    "B",
+                    0.0
+                ],
+                [
+                    "D",
+                    0.0
+                ]
+            ],
+            "warning": null
+        },
+        "4": {
+            "question_id": 4,
+            "selected": "D",
+            "status": "VALID",
+            "is_valid": true,
+            "fill_ratios": {
+                "A": 0.0,
+                "B": 0.0,
+                "C": 0.0,
+                "D": 1.0
+            },
+            "delta_tau": 1.0,
+            "sorted_options": [
+                [
+                    "D",
+                    1.0
+                ],
+                [
+                    "A",
+                    0.0
+                ],
+                [
+                    "B",
+                    0.0
+                ],
+                [
+                    "C",
+                    0.0
+                ]
+            ],
+            "warning": null
+        },
+        "5": {
+            "question_id": 5,
+            "selected": null,
+            "status": "BLANK",
+            "is_valid": false,
+            "fill_ratios": {
+                "A": 0.0,
+                "B": 0.0,
+                "C": 0.0,
+                "D": 0.0
+            },
+            "delta_tau": 0.0,
+            "sorted_options": [
+                [
+                    "A",
+                    0.0
+                ],
+                [
+                    "B",
+                    0.0
+                ],
+                [
+                    "C",
+                    0.0
+                ],
+                [
+                    "D",
+                    0.0
+                ]
+            ],
+            "warning": null
+        },
+        "6": {
+            "question_id": 6,
+            "selected": "B",
+            "status": "VALID",
+            "is_valid": true,
+            "fill_ratios": {
+                "A": 0.0,
+                "B": 1.0,
+                "C": 0.0091,
+                "D": 0.0
+            },
+            "delta_tau": 0.9909,
+            "sorted_options": [
+                [
+                    "B",
+                    1.0
+                ],
+                [
+                    "C",
+                    0.0091
+                ],
+                [
+                    "A",
+                    0.0
+                ],
+                [
+                    "D",
+                    0.0
+                ]
+            ],
+            "warning": null
+        },
+        "7": {
+            "question_id": 7,
+            "selected": "A",
+            "status": "VALID",
+            "is_valid": true,
+            "fill_ratios": {
+                "A": 1.0,
+                "B": 0.0,
+                "C": 0.0,
+                "D": 0.0
+            },
+            "delta_tau": 1.0,
+            "sorted_options": [
+                [
+                    "A",
+                    1.0
+                ],
+                [
+                    "B",
+                    0.0
+                ],
+                [
+                    "C",
+                    0.0
+                ],
+                [
+                    "D",
+                    0.0
+                ]
+            ],
+            "warning": null
+        },
+        "8": {
+            "question_id": 8,
+            "selected": "C",
+            "status": "ERASED_VALID",
+            "is_valid": true,
+            "fill_ratios": {
+                "A": 0.0,
+                "B": 0.5102,
+                "C": 1.0,
+                "D": 0.0
+            },
+            "delta_tau": 0.4898,
+            "sorted_options": [
+                [
+                    "C",
+                    1.0
+                ],
+                [
+                    "B",
+                    0.5102
+                ],
+                [
+                    "A",
+                    0.0
+                ],
+                [
+                    "D",
+                    0.0
+                ]
+            ],
+            "warning": "Phát hiện vết tẩy xóa tại ô B (tau=0.510); chọn ô C (tau=1.000, delta=0.490 >= 0.15)"
+        },
+        "9": {
+            "question_id": 9,
+            "selected": "D",
+            "status": "VALID",
+            "is_valid": true,
+            "fill_ratios": {
+                "A": 0.0,
+                "B": 0.0,
+                "C": 0.0,
+                "D": 1.0
+            },
+            "delta_tau": 1.0,
+            "sorted_options": [
+                [
+                    "D",
+                    1.0
+                ],
+                [
+                    "A",
+                    0.0
+                ],
+                [
+                    "B",
+                    0.0
+                ],
+                [
+                    "C",
+                    0.0
+                ]
+            ],
+            "warning": null
+        },
+        "10": {
+            "question_id": 10,
+            "selected": "A",
+            "status": "VALID",
+            "is_valid": true,
+            "fill_ratios": {
+                "A": 1.0,
+                "B": 0.0,
+                "C": 0.0,
+                "D": 0.0
+            },
+            "delta_tau": 1.0,
+            "sorted_options": [
+                [
+                    "A",
+                    1.0
+                ],
+                [
+                    "B",
+                    0.0
+                ],
+                [
+                    "C",
+                    0.0
+                ],
+                [
+                    "D",
+                    0.0
+                ]
+            ],
+            "warning": null
+        },
+        "11": {
+            "question_id": 11,
+            "selected": "B",
+            "status": "VALID",
+            "is_valid": true,
+            "fill_ratios": {
+                "A": 0.0091,
+                "B": 1.0,
+                "C": 0.0,
+                "D": 0.0
+            },
+            "delta_tau": 0.9909,
+            "sorted_options": [
+                [
+                    "B",
+                    1.0
+                ],
+                [
+                    "A",
+                    0.0091
+                ],
+                [
+                    "C",
+                    0.0
+                ],
+                [
+                    "D",
+                    0.0
+                ]
+            ],
+            "warning": null
+        },
+        "12": {
+            "question_id": 12,
+            "selected": null,
+            "status": "BLANK",
+            "is_valid": false,
+            "fill_ratios": {
+                "A": 0.0,
+                "B": 0.0091,
+                "C": 0.0,
+                "D": 0.0
+            },
+            "delta_tau": 0.0091,
+            "sorted_options": [
+                [
+                    "B",
+                    0.0091
+                ],
+                [
+                    "A",
+                    0.0
+                ],
+                [
+                    "C",
+                    0.0
+                ],
+                [
+                    "D",
+                    0.0
+                ]
+            ],
+            "warning": null
+        },
+        "13": {
+            "question_id": 13,
+            "selected": "C",
+            "status": "VALID",
+            "is_valid": true,
+            "fill_ratios": {
+                "A": 0.0,
+                "B": 0.0,
+                "C": 1.0,
+                "D": 0.0
+            },
+            "delta_tau": 1.0,
+            "sorted_options": [
+                [
+                    "C",
+                    1.0
+                ],
+                [
+                    "A",
+                    0.0
+                ],
+                [
+                    "B",
+                    0.0
+                ],
+                [
+                    "D",
+                    0.0
+                ]
+            ],
+            "warning": null
+        },
+        "14": {
+            "question_id": 14,
+            "selected": "D",
+            "status": "VALID",
+            "is_valid": true,
+            "fill_ratios": {
+                "A": 0.0,
+                "B": 0.0,
+                "C": 0.0091,
+                "D": 1.0
+            },
+            "delta_tau": 0.9909,
+            "sorted_options": [
+                [
+                    "D",
+                    1.0
+                ],
+                [
+                    "C",
+                    0.0091
+                ],
+                [
+                    "A",
+                    0.0
+                ],
+                [
+                    "B",
+                    0.0
+                ]
+            ],
+            "warning": null
+        },
+        "15": {
+            "question_id": 15,
+            "selected": null,
+            "status": "MULTIPLE_INVALID",
+            "is_valid": false,
+            "fill_ratios": {
+                "A": 1.0,
+                "B": 1.0,
+                "C": 0.0,
+                "D": 0.0
+            },
+            "delta_tau": 0.0,
+            "sorted_options": [
+                [
+                    "A",
+                    1.0
+                ],
+                [
+                    "B",
+                    1.0
+                ],
+                [
+                    "C",
+                    0.0
+                ],
+                [
+                    "D",
+                    0.0
+                ]
+            ],
+            "warning": "Phạm quy tô đúp hoặc tẩy không sạch giữa A (tau=1.000) và B (tau=1.000); delta=0.000 < 0.15"
+        },
+        "16": {
+            "question_id": 16,
+            "selected": "B",
+            "status": "VALID",
+            "is_valid": true,
+            "fill_ratios": {
+                "A": 0.0,
+                "B": 1.0,
+                "C": 0.0,
+                "D": 0.0
+            },
+            "delta_tau": 1.0,
+            "sorted_options": [
+                [
+                    "B",
+                    1.0
+                ],
+                [
+                    "A",
+                    0.0
+                ],
+                [
+                    "C",
+                    0.0
+                ],
+                [
+                    "D",
+                    0.0
+                ]
+            ],
+            "warning": null
+        },
+        "17": {
+            "question_id": 17,
+            "selected": "C",
+            "status": "ERASED_VALID",
+            "is_valid": true,
+            "fill_ratios": {
+                "A": 0.5193,
+                "B": 0.0,
+                "C": 1.0,
+                "D": 0.0
+            },
+            "delta_tau": 0.4807,
+            "sorted_options": [
+                [
+                    "C",
+                    1.0
+                ],
+                [
+                    "A",
+                    0.5193
+                ],
+                [
+                    "B",
+                    0.0
+                ],
+                [
+                    "D",
+                    0.0
+                ]
+            ],
+            "warning": "Phát hiện vết tẩy xóa tại ô A (tau=0.519); chọn ô C (tau=1.000, delta=0.481 >= 0.15)"
+        },
+        "18": {
+            "question_id": 18,
+            "selected": "D",
+            "status": "VALID",
+            "is_valid": true,
+            "fill_ratios": {
+                "A": 0.0,
+                "B": 0.0,
+                "C": 0.0,
+                "D": 1.0
+            },
+            "delta_tau": 1.0,
+            "sorted_options": [
+                [
+                    "D",
+                    1.0
+                ],
+                [
+                    "A",
+                    0.0
+                ],
+                [
+                    "B",
+                    0.0
+                ],
+                [
+                    "C",
+                    0.0
+                ]
+            ],
+            "warning": null
+        },
+        "19": {
+            "question_id": 19,
+            "selected": "A",
+            "status": "VALID",
+            "is_valid": true,
+            "fill_ratios": {
+                "A": 1.0,
+                "B": 0.0,
+                "C": 0.0,
+                "D": 0.0
+            },
+            "delta_tau": 1.0,
+            "sorted_options": [
+                [
+                    "A",
+                    1.0
+                ],
+                [
+                    "B",
+                    0.0
+                ],
+                [
+                    "C",
+                    0.0
+                ],
+                [
+                    "D",
+                    0.0
+                ]
+            ],
+            "warning": null
+        },
+        "20": {
+            "question_id": 20,
+            "selected": "B",
+            "status": "VALID",
+            "is_valid": true,
+            "fill_ratios": {
+                "A": 0.0,
+                "B": 1.0,
+                "C": 0.0,
+                "D": 0.0
+            },
+            "delta_tau": 1.0,
+            "sorted_options": [
+                [
+                    "B",
+                    1.0
+                ],
+                [
+                    "A",
+                    0.0
+                ],
+                [
+                    "C",
+                    0.0
+                ],
+                [
+                    "D",
+                    0.0
+                ]
+            ],
+            "warning": null
+        }
+    },
+    "num_components_ccl": 62,
+    "num_filtered_bubbles": 25,
+    "threshold_value": null,
+    "latency_ms": {
+        "thresholding_ms": 67.116,
+        "morphology_ms": 76.252,
+        "ccl_ms": 162.973,
+        "roi_recognition_ms": 13.987,
+        "total_pipeline_scratch_ms": 320.355
+    },
+    "benchmark_opencv": {
+        "threshold_metrics": {
+            "mse": 0.0,
+            "psnr_db": 999.0,
+            "iou_percent": 100.0,
+            "dice_percent": 100.0,
+            "pixel_accuracy_percent": 100.0
+        },
+        "morphology_metrics": {
+            "mse": 0.0,
+            "psnr_db": 999.0,
+            "iou_percent": 100.0,
+            "dice_percent": 100.0,
+            "pixel_accuracy_percent": 100.0
+        },
+        "delta_threshold": null,
+        "threshold_scratch": null,
+        "threshold_opencv": null,
+        "ccl_scratch_count": 62,
+        "ccl_opencv_count": 62,
+        "ccl_count_match": true,
+        "latency_opencv_ms": {
+            "thresholding_ms": 13.233,
+            "morphology_ms": 2.571,
+            "ccl_ms": 9.68,
+            "total_opencv_ms": 25.541
+        },
+        "acceptance_criteria": {
+            "delta_otsu_pass": true,
+            "iou_morph_pass": true,
+            "ccl_match_pass": true
+        }
+    }
+}

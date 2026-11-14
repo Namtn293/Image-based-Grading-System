@@ -1,0 +1,33 @@
+{
+    "threshold_metrics": {
+        "mse": 0.0,
+        "psnr_db": 999.0,
+        "iou_percent": 100.0,
+        "dice_percent": 100.0,
+        "pixel_accuracy_percent": 100.0
+    },
+    "morphology_metrics": {
+        "mse": 0.0,
+        "psnr_db": 999.0,
+        "iou_percent": 100.0,
+        "dice_percent": 100.0,
+        "pixel_accuracy_percent": 100.0
+    },
+    "delta_threshold": null,
+    "threshold_scratch": null,
+    "threshold_opencv": null,
+    "ccl_scratch_count": 62,
+    "ccl_opencv_count": 62,
+    "ccl_count_match": true,
+    "latency_opencv_ms": {
+        "thresholding_ms": 13.233,
+        "morphology_ms": 2.571,
+        "ccl_ms": 9.68,
+        "total_opencv_ms": 25.541
+    },
+    "acceptance_criteria": {
+        "delta_otsu_pass": true,
+        "iou_morph_pass": true,
+        "ccl_match_pass": true
+    }
+}
