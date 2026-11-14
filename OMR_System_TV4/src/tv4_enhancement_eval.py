@@ -1,11 +1,10 @@
 """Module TV4: Image Enhancement, Benchmarking, CSV Matrix I/O, and Grading Logic
-Author: Thanh Vien 4 - OMR Project Team 4
-Course: Digital Image Processing (INT13146) - PTIT
+Production Computer Vision Engine
 
 Algorithms implemented from scratch using NumPy:
 1. Histogram Equalization from scratch (using CDF mapping, robust to uniform & edge-case images)
 2. Median Filter 2D from scratch (vectorized insertion sort across neighborhood planes, pure NumPy without np.sort/np.partition)
-3. Robust CSV Matrix I/O for grayscale matrices (according to instructor's verification slides 10-12)
+3. Robust CSV Matrix I/O for grayscale matrices (numerical matrix data pipeline)
 4. Comprehensive Quantitative Benchmarks (MSE, PSNR, Difference Map, Execution Time)
 5. Grading System, Result Validation, and Professional Excel Reporting with OpenPyXL styling
 """
@@ -240,7 +239,7 @@ def median_filter_scratch(
 
 
 # ==============================================================================
-# 2. MATRIX CSV I/O (FOR INSTRUCTOR VERIFICATION - SLIDES 10, 11, 12)
+# 2. MATRIX CSV I/O (NUMERICAL MATRIX PROCESSING ENGINE)
 # ==============================================================================
 
 def save_matrix_to_csv(matrix: np.ndarray, file_path: str) -> None:
@@ -440,7 +439,21 @@ def benchmark_all_modules(image: np.ndarray) -> List[Dict[str, Any]]:
         )
         has_tv3 = True
     except ImportError:
-        pass
+        try:
+            import sys
+            from pathlib import Path
+            tv3_dir = str(Path(__file__).resolve().parent.parent.parent / "OMR_System_TV3" / "src")
+            if tv3_dir not in sys.path:
+                sys.path.insert(0, tv3_dir)
+            from tv3_segmentation import (
+                otsu_threshold_scratch,
+                adaptive_mean_threshold_scratch,
+                opening_binary_scratch as morphology_open_scratch,
+                closing_binary_scratch as morphology_close_scratch,
+            )
+            has_tv3 = True
+        except ImportError:
+            pass
 
     if image.ndim == 3 and image.shape[2] == 1:
         gray = image[:, :, 0]
@@ -539,7 +552,7 @@ def benchmark_all_modules(image: np.ndarray) -> List[Dict[str, Any]]:
     # 5-7. TV3 Benchmarks (if TV3 module present)
     if has_tv3:
         t0 = time.perf_counter()
-        t_val_sc, otsu_sc = otsu_threshold_scratch(gray)
+        t_val_sc, otsu_sc = otsu_threshold_scratch(gray, method="BINARY_INV")
         t_sc = (time.perf_counter() - t0) * 1000.0
         t0 = time.perf_counter()
         t_val_cv, otsu_cv = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
@@ -558,7 +571,7 @@ def benchmark_all_modules(image: np.ndarray) -> List[Dict[str, Any]]:
         })
 
         t0 = time.perf_counter()
-        adap_sc = adaptive_mean_threshold_scratch(gray, block_size=51, c_offset=42.0)
+        adap_sc = adaptive_mean_threshold_scratch(gray, block_size=51, C=42.0)
         t_sc = (time.perf_counter() - t0) * 1000.0
         t0 = time.perf_counter()
         adap_cv = cv2.adaptiveThreshold(
@@ -580,8 +593,8 @@ def benchmark_all_modules(image: np.ndarray) -> List[Dict[str, Any]]:
 
         kernel3 = np.ones((3, 3), dtype=np.uint8)
         t0 = time.perf_counter()
-        open_sc = morphology_open_scratch(adap_sc, kernel_size=3)
-        close_sc = morphology_close_scratch(open_sc, kernel_size=3)
+        open_sc = morphology_open_scratch(adap_sc, kernel3)
+        close_sc = morphology_close_scratch(open_sc, kernel3)
         t_sc = (time.perf_counter() - t0) * 1000.0
         t0 = time.perf_counter()
         open_cv = cv2.morphologyEx(adap_cv, cv2.MORPH_OPEN, kernel3)
@@ -687,7 +700,20 @@ def run_ablation_study(
         )
         has_tv3 = True
     except ImportError:
-        pass
+        try:
+            import sys
+            from pathlib import Path
+            tv3_dir = str(Path(__file__).resolve().parent.parent.parent / "OMR_System_TV3" / "src")
+            if tv3_dir not in sys.path:
+                sys.path.insert(0, tv3_dir)
+            from tv3_segmentation import (
+                otsu_threshold_scratch,
+                opening_binary_scratch as morphology_open_scratch,
+                extract_bubble_answers,
+            )
+            has_tv3 = True
+        except ImportError:
+            pass
 
     if warped_gray.ndim == 3 and warped_gray.shape[2] == 1:
         warped_gray = warped_gray[:, :, 0]
@@ -700,11 +726,18 @@ def run_ablation_study(
     total_q = len(ground_truth_answers) if ground_truth_answers else 20
 
     if has_tv3:
-        ans_adap, ratios_adap, _ = extract_bubble_answers(
-            warped_gray, total_questions=total_q, fill_threshold=0.38, use_scratch=True
-        )
-        _, otsu_bin = otsu_threshold_scratch(warped_gray)
-        otsu_clean = morphology_open_scratch(otsu_bin, kernel_size=3)
+        try:
+            ans_adap, ratios_adap, _ = extract_bubble_answers(
+                warped_gray, total_questions=total_q, fill_threshold=0.38, use_scratch=True
+            )
+        except AttributeError:
+            adap_bin = cv2.adaptiveThreshold(warped_gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 51, 42)
+            kernel3 = np.ones((3, 3), np.uint8)
+            adap_clean = cv2.morphologyEx(adap_bin, cv2.MORPH_OPEN, kernel3)
+            ans_adap, ratios_adap = _extract_bubble_answers_from_binary(adap_clean, total_q, fill_threshold=0.38)
+        _, otsu_bin = otsu_threshold_scratch(warped_gray, method="BINARY_INV")
+        kernel3 = np.ones((3, 3), np.uint8)
+        otsu_clean = morphology_open_scratch(otsu_bin, kernel3)
     else:
         adap_bin = cv2.adaptiveThreshold(warped_gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 51, 42)
         kernel3 = np.ones((3, 3), np.uint8)
@@ -1041,6 +1074,33 @@ class OMRGrader:
                     elif status in ("BLANK", "MULTIPLE"):
                         c.fill = fill_warn
 
+        if batch_results:
+            scores = [r["score_10"] for r in batch_results]
+            avg_score = round(float(np.mean(scores)), 2)
+            avg_correct = round(float(np.mean([r["correct_count"] for r in batch_results])), 1)
+            avg_incorrect = round(float(np.mean([r["incorrect_count"] for r in batch_results])), 1)
+            avg_blank = round(float(np.mean([r["blank_count"] for r in batch_results])), 1)
+            avg_multiple = round(float(np.mean([r["multiple_count"] for r in batch_results])), 1)
+            tot_q = batch_results[0]["total_questions"]
+
+            summary_row1 = [
+                "TB", f"Điểm Trung Bình ({len(batch_results)} SV)", avg_score,
+                avg_correct, avg_incorrect, avg_blank, avg_multiple, tot_q
+            ]
+            for _ in q_keys:
+                summary_row1.append("—")
+
+            ws1.append(summary_row1)
+            sum_row_idx = ws1.max_row
+            font_summary = Font(name="Segoe UI", size=10, bold=True, color="1E293B")
+            fill_summary = PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid")
+            for col_idx in range(1, len(summary_row1) + 1):
+                c = ws1.cell(row=sum_row_idx, column=col_idx)
+                c.font = font_summary
+                c.fill = fill_summary
+                c.border = thin_border
+                c.alignment = align_center
+
         # Auto-adjust column widths for Sheet 1
         for col in ws1.columns:
             max_len = max(len(str(cell.value or "")) for cell in col)
@@ -1085,6 +1145,26 @@ class OMRGrader:
                 row_idx = ws2.max_row
                 for col_idx in range(1, len(headers2) + 1):
                     c = ws2.cell(row=row_idx, column=col_idx)
+                    c.border = thin_border
+                    c.alignment = align_center
+
+            if q_keys:
+                all_cor = [sum(1 for r in batch_results if any(d["question"] == qk and d["is_correct"] for d in r["details"])) for qk in q_keys]
+                all_acc = [round((c / max(total_students, 1)) * 100.0, 1) for c in all_cor]
+                avg_acc = round(float(np.mean(all_acc)), 1)
+                sum_row2 = [
+                    "Toàn Đề", "—", round(float(np.mean(all_cor)), 1),
+                    round(float(total_students - np.mean(all_cor)), 1),
+                    "—", "—", avg_acc, round(100.0 - avg_acc, 1)
+                ]
+                ws2.append(sum_row2)
+                sum_row_idx2 = ws2.max_row
+                font_summary = Font(name="Segoe UI", size=10, bold=True, color="1E293B")
+                fill_summary = PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid")
+                for col_idx in range(1, len(headers2) + 1):
+                    c = ws2.cell(row=sum_row_idx2, column=col_idx)
+                    c.font = font_summary
+                    c.fill = fill_summary
                     c.border = thin_border
                     c.alignment = align_center
 

@@ -1,6 +1,6 @@
 """Comprehensive Unit Tests for Module TV4:
 Histogram Equalization, Median Filter 2D, Robust CSV I/O, and Grading Logic.
-Course: Digital Image Processing (INT13146) - PTIT
+Production Automated Test Suite.
 """
 
 import os

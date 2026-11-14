@@ -1,11 +1,10 @@
 """CLI Demo & Verification Script for Member 4 (TV4)
-Course: Digital Image Processing (INT13146) - PTIT
-Author: Thanh Vien 4 - OMR Project Team 4
+Production Computer Vision Engine
 
-Run this script to verify all Member 4 requirements:
+Run this script to verify all Member 4 modules:
 1. Core NumPy Scratch Algorithms (Histogram Equalization & Median Filter)
 2. Quantitative Benchmark vs OpenCV (MSE, PSNR, Latency)
-3. CSV Matrix I/O (Slide 10-12 compliance)
+3. CSV Matrix Numerical Pipeline
 4. End-to-End Pipeline Grading & Excel Report Generation
 """
 
@@ -93,9 +92,9 @@ def main():
         print(f"{row['module']:6s} | {row['algorithm']:32s} | {row['mse']:8.4f} | {row['psnr_db']:9.2f} | {iou_str:8s} | {row['time_scratch_ms']:12.2f} | {row['time_opencv_ms']:11.2f}")
 
     # ---------------------------------------------------------
-    # 3. CSV MATRIX I/O VERIFICATION (SLIDE 10-12)
+    # 3. CSV MATRIX I/O VERIFICATION
     # ---------------------------------------------------------
-    print_header("3. KIEM THU DOC/XUAT MA TRAN MUC XAM DANG FILE CSV (SLIDE THAY)")
+    print_header("3. KIEM THU DOC/XUAT MA TRAN MUC XAM DANG FILE CSV (SO HOC)")
     csv_loaded = load_matrix_from_csv(matrix_csv_path)
     print(f"[*] Da load thanh cong ma tran CSV tu: {matrix_csv_path}")
     print(f"    - Kich thuoc ma tran: {csv_loaded.shape}")

@@ -25,11 +25,11 @@ def create_base_omr_sheet(student_id: str, student_fill: dict, erased_marks: dic
 
     # Header with crisp thickness=2 and LINE_AA
     cv2.putText(
-        sheet, "PHIEU TRA LOI TRAC NGHIEM - INT13146",
+        sheet, "PHIEU TRA LOI TRAC NGHIEM TIEU CHUAN",
         (115, 102), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (10, 10, 10), 2, cv2.LINE_AA
     )
     cv2.putText(
-        sheet, f"Thi sinh: {student_id}   |   Mon: Xu Ly Anh (PTIT)",
+        sheet, f"Thi sinh: {student_id}   |   Ma de: 101",
         (115, 132), cv2.FONT_HERSHEY_SIMPLEX, 0.56, (30, 30, 30), 2, cv2.LINE_AA
     )
 
