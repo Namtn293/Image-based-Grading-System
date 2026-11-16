@@ -1,0 +1,62 @@
+[
+  {
+    "module": "TV1",
+    "algorithm": "Grayscale Luminance (BT.601)",
+    "mse": 0.0,
+    "psnr_db": 999.0,
+    "iou": null,
+    "dice": null,
+    "error_metric": "Max Diff: 0",
+    "time_scratch_ms": 20.408,
+    "time_opencv_ms": 2.431,
+    "status": "PASS"
+  },
+  {
+    "module": "TV1",
+    "algorithm": "Gaussian Blur 2D (5x5, sigma=1.4)",
+    "mse": 0.0072,
+    "psnr_db": 69.54,
+    "iou": null,
+    "dice": null,
+    "error_metric": "Max Diff: 1",
+    "time_scratch_ms": 39.494,
+    "time_opencv_ms": 0.659,
+    "status": "PASS"
+  },
+  {
+    "module": "TV1",
+    "algorithm": "Canny Edge Detector (4 bước)",
+    "mse": 23.0839,
+    "psnr_db": 34.5,
+    "iou": 0.9902,
+    "dice": 0.9951,
+    "error_metric": "IoU: 99.02%",
+    "time_scratch_ms": 241.413,
+    "time_opencv_ms": 2.027,
+    "status": "PASS"
+  },
+  {
+    "module": "TV1",
+    "algorithm": "Hough Lines Standard (rho=1, theta=1°)",
+    "mse": 0.0,
+    "psnr_db": 999.0,
+    "iou": null,
+    "dice": null,
+    "error_metric": "Lines found: Scratch=34, CV=79",
+    "time_scratch_ms": 157.934,
+    "time_opencv_ms": 7.4,
+    "status": "PASS"
+  },
+  {
+    "module": "TV1",
+    "algorithm": "Sheet Corner Localization (4 góc)",
+    "mse": 0.0,
+    "psnr_db": 999.0,
+    "iou": null,
+    "dice": null,
+    "error_metric": "Corner Dist: 0.00 px",
+    "time_scratch_ms": 21.47,
+    "time_opencv_ms": 0.274,
+    "status": "PASS"
+  }
+]
