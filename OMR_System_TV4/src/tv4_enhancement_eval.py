@@ -417,10 +417,29 @@ def benchmark_all_modules(image: np.ndarray) -> List[Dict[str, Any]]:
     """Run comprehensive quantitative unit benchmarks across TV4 algorithms (and TV1-TV3 if present)."""
     has_tv1 = False
     try:
-        from .tv1_preprocessing import rgb_to_gray_scratch, gaussian_blur_scratch, canny_edge_scratch
+        from .tv1_preprocessing import (
+            rgb_to_gray_scratch,
+            gaussian_blur_scratch,
+            canny_edge_scratch,
+            detect_sheet_corners
+        )
         has_tv1 = True
     except ImportError:
-        pass
+        try:
+            import sys
+            from pathlib import Path
+            tv1_dir = str(Path(__file__).resolve().parent.parent.parent / "OMR_System_TV1" / "src")
+            if tv1_dir not in sys.path:
+                sys.path.insert(0, tv1_dir)
+            from tv1_preprocessing import (
+                rgb_to_gray_scratch,
+                gaussian_blur_scratch,
+                canny_edge_scratch,
+                detect_sheet_corners
+            )
+            has_tv1 = True
+        except ImportError:
+            pass
 
     has_tv2 = False
     try:
@@ -466,16 +485,18 @@ def benchmark_all_modules(image: np.ndarray) -> List[Dict[str, Any]]:
     # 1-3. TV1 Benchmarks (if TV1 module present)
     if has_tv1:
         if image.ndim == 3 and image.shape[2] >= 3:
-            rgb = image[:, :, :3][:, :, ::-1]
             t0 = time.perf_counter()
-            g_sc = rgb_to_gray_scratch(rgb)
+            try:
+                g_sc = rgb_to_gray_scratch(image, is_bgr=True)
+            except TypeError:
+                g_sc = rgb_to_gray_scratch(image[:, :, :3][:, :, ::-1])
             t_sc = (time.perf_counter() - t0) * 1000.0
             t0 = time.perf_counter()
             g_cv = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
             t_cv = (time.perf_counter() - t0) * 1000.0
             results.append({
-                "module": "TV1",
-                "algorithm": "RGB to Grayscale",
+                "module": "Phân hệ 1 (Tiền xử lý)",
+                "algorithm": "RGB to Grayscale (BT.601)",
                 "mse": round(calculate_mse(g_sc, g_cv), 4),
                 "psnr_db": round(calculate_psnr(g_sc, g_cv), 2),
                 "iou": None,
@@ -492,8 +513,8 @@ def benchmark_all_modules(image: np.ndarray) -> List[Dict[str, Any]]:
         b_cv = cv2.GaussianBlur(gray, (5, 5), 1.4, borderType=cv2.BORDER_REFLECT_101)
         t_cv = (time.perf_counter() - t0) * 1000.0
         results.append({
-            "module": "TV1",
-            "algorithm": "Gaussian Blur (5x5)",
+            "module": "Phân hệ 1 (Tiền xử lý)",
+            "algorithm": "Gaussian Blur 2D (5x5)",
             "mse": round(calculate_mse(b_sc, b_cv), 4),
             "psnr_db": round(calculate_psnr(b_sc, b_cv), 2),
             "iou": None,
@@ -511,13 +532,32 @@ def benchmark_all_modules(image: np.ndarray) -> List[Dict[str, Any]]:
         t_cv = (time.perf_counter() - t0) * 1000.0
         iou_e, dice_e = calculate_binary_iou_dice(e_sc, e_cv)
         results.append({
-            "module": "TV1",
+            "module": "Phân hệ 1 (Tiền xử lý)",
             "algorithm": "Canny Edge Detection",
             "mse": round(calculate_mse(e_sc, e_cv), 4),
             "psnr_db": round(calculate_psnr(e_sc, e_cv), 2),
             "iou": iou_e,
             "dice": dice_e,
             "delta_t": None,
+            "time_scratch_ms": round(t_sc, 3),
+            "time_opencv_ms": round(t_cv, 3),
+        })
+
+        t0 = time.perf_counter()
+        c_sc = detect_sheet_corners(gray, use_scratch=True)
+        t_sc = (time.perf_counter() - t0) * 1000.0
+        t0 = time.perf_counter()
+        c_cv = detect_sheet_corners(gray, use_scratch=False)
+        t_cv = (time.perf_counter() - t0) * 1000.0
+        c_err = calculate_corner_error(c_sc, c_cv)
+        results.append({
+            "module": "Phân hệ 1 (Tiền xử lý)",
+            "algorithm": "Hough & Quad Corner Detection",
+            "mse": round(calculate_mse(c_sc, c_cv), 4),
+            "psnr_db": round(calculate_psnr(c_sc, c_cv), 2),
+            "iou": None,
+            "dice": None,
+            "delta_t": c_err,
             "time_scratch_ms": round(t_sc, 3),
             "time_opencv_ms": round(t_cv, 3),
         })
@@ -538,7 +578,7 @@ def benchmark_all_modules(image: np.ndarray) -> List[Dict[str, Any]]:
         w_cv = warp_perspective_sheet(gray, quad, 800, 1000, use_scratch=False)
         t_cv = (time.perf_counter() - t0) * 1000.0
         results.append({
-            "module": "TV2",
+            "module": "Phân hệ 2 (Hình học SVD)",
             "algorithm": "SVD Homography + Bilinear Warp",
             "mse": round(calculate_mse(w_sc, w_cv), 4),
             "psnr_db": round(calculate_psnr(w_sc, w_cv), 2),
@@ -559,7 +599,7 @@ def benchmark_all_modules(image: np.ndarray) -> List[Dict[str, Any]]:
         t_cv = (time.perf_counter() - t0) * 1000.0
         iou_o, dice_o = calculate_binary_iou_dice(otsu_sc, otsu_cv)
         results.append({
-            "module": "TV3",
+            "module": "Phân hệ 3 (Phân đoạn)",
             "algorithm": "Otsu Global Thresholding",
             "mse": round(calculate_mse(otsu_sc, otsu_cv), 4),
             "psnr_db": round(calculate_psnr(otsu_sc, otsu_cv), 2),
@@ -580,7 +620,7 @@ def benchmark_all_modules(image: np.ndarray) -> List[Dict[str, Any]]:
         t_cv = (time.perf_counter() - t0) * 1000.0
         iou_a, dice_a = calculate_binary_iou_dice(adap_sc, adap_cv)
         results.append({
-            "module": "TV3",
+            "module": "Phân hệ 3 (Phân đoạn)",
             "algorithm": "Adaptive Mean Thresholding",
             "mse": round(calculate_mse(adap_sc, adap_cv), 4),
             "psnr_db": round(calculate_psnr(adap_sc, adap_cv), 2),
@@ -602,7 +642,7 @@ def benchmark_all_modules(image: np.ndarray) -> List[Dict[str, Any]]:
         t_cv = (time.perf_counter() - t0) * 1000.0
         iou_m, dice_m = calculate_binary_iou_dice(close_sc, close_cv)
         results.append({
-            "module": "TV3",
+            "module": "Phân hệ 3 (Phân đoạn)",
             "algorithm": "Morphological Open + Close (3x3)",
             "mse": round(calculate_mse(close_sc, close_cv), 4),
             "psnr_db": round(calculate_psnr(close_sc, close_cv), 2),
@@ -616,7 +656,7 @@ def benchmark_all_modules(image: np.ndarray) -> List[Dict[str, Any]]:
     # 8. TV4: Histogram Equalization & Median Filter (Always tested)
     bm_he = benchmark_hist_equalization(gray, iterations=3)
     results.append({
-        "module": "TV4",
+        "module": "Phân hệ 4 (Cải thiện ảnh)",
         "algorithm": bm_he["algorithm"],
         "mse": bm_he["mse"],
         "psnr_db": bm_he["psnr_db"],
@@ -628,7 +668,7 @@ def benchmark_all_modules(image: np.ndarray) -> List[Dict[str, Any]]:
     })
     bm_mf = benchmark_median_filter(gray, kernel_size=3, iterations=3)
     results.append({
-        "module": "TV4",
+        "module": "Phân hệ 4 (Khử nhiễu)",
         "algorithm": bm_mf["algorithm"],
         "mse": bm_mf["mse"],
         "psnr_db": bm_mf["psnr_db"],
@@ -1044,13 +1084,13 @@ class OMRGrader:
         for stt, r in enumerate(batch_results, start=1):
             row_data = [
                 stt,
-                r["student_id"],
-                r["score_10"],
-                r["correct_count"],
-                r["incorrect_count"],
-                r["blank_count"],
-                r["multiple_count"],
-                r["total_questions"]
+                r.get("student_id", f"SV{stt:03d}"),
+                r.get("score_10", 0.0),
+                r.get("correct_count", 0),
+                r.get("incorrect_count", 0),
+                r.get("blank_count", 0),
+                r.get("multiple_count", 0),
+                r.get("total_questions", len(r.get("details", [])))
             ]
             det_dict = {d["question"]: d for d in r["details"]}
             for qk in q_keys:
@@ -1075,13 +1115,13 @@ class OMRGrader:
                         c.fill = fill_warn
 
         if batch_results:
-            scores = [r["score_10"] for r in batch_results]
+            scores = [r.get("score_10", 0.0) for r in batch_results]
             avg_score = round(float(np.mean(scores)), 2)
-            avg_correct = round(float(np.mean([r["correct_count"] for r in batch_results])), 1)
-            avg_incorrect = round(float(np.mean([r["incorrect_count"] for r in batch_results])), 1)
-            avg_blank = round(float(np.mean([r["blank_count"] for r in batch_results])), 1)
-            avg_multiple = round(float(np.mean([r["multiple_count"] for r in batch_results])), 1)
-            tot_q = batch_results[0]["total_questions"]
+            avg_correct = round(float(np.mean([r.get("correct_count", 0) for r in batch_results])), 1)
+            avg_incorrect = round(float(np.mean([r.get("incorrect_count", 0) for r in batch_results])), 1)
+            avg_blank = round(float(np.mean([r.get("blank_count", 0) for r in batch_results])), 1)
+            avg_multiple = round(float(np.mean([r.get("multiple_count", 0) for r in batch_results])), 1)
+            tot_q = batch_results[0].get("total_questions", len(q_keys))
 
             summary_row1 = [
                 "TB", f"Điểm Trung Bình ({len(batch_results)} SV)", avg_score,

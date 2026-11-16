@@ -10,26 +10,53 @@ import numpy as np
 import cv2
 import openpyxl
 
-from src.tv4_enhancement_eval import (
-    histogram_equalization_scratch,
-    median_filter_scratch,
-    _pad_2d_scratch,
-    save_matrix_to_csv,
-    load_matrix_from_csv,
-    calculate_mse,
-    calculate_psnr,
-    calculate_difference_map,
-    calculate_binary_iou_dice,
-    calculate_otsu_delta_t,
-    calculate_corner_error,
-    calculate_mark_accuracy,
-    benchmark_hist_equalization,
-    benchmark_median_filter,
-    benchmark_all_modules,
-    run_ablation_study,
-    OMRGrader
-)
-from src.pipeline_coordinator import OMRPipeline
+import sys
+SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
+
+try:
+    from tv4_enhancement_eval import (
+        histogram_equalization_scratch,
+        median_filter_scratch,
+        _pad_2d_scratch,
+        save_matrix_to_csv,
+        load_matrix_from_csv,
+        calculate_mse,
+        calculate_psnr,
+        calculate_difference_map,
+        calculate_binary_iou_dice,
+        calculate_otsu_delta_t,
+        calculate_corner_error,
+        calculate_mark_accuracy,
+        benchmark_hist_equalization,
+        benchmark_median_filter,
+        benchmark_all_modules,
+        run_ablation_study,
+        OMRGrader
+    )
+    from pipeline_coordinator import OMRPipeline, _resolve_bubble_grid, detect_sheet_questions
+except ImportError:
+    from src.tv4_enhancement_eval import (
+        histogram_equalization_scratch,
+        median_filter_scratch,
+        _pad_2d_scratch,
+        save_matrix_to_csv,
+        load_matrix_from_csv,
+        calculate_mse,
+        calculate_psnr,
+        calculate_difference_map,
+        calculate_binary_iou_dice,
+        calculate_otsu_delta_t,
+        calculate_corner_error,
+        calculate_mark_accuracy,
+        benchmark_hist_equalization,
+        benchmark_median_filter,
+        benchmark_all_modules,
+        run_ablation_study,
+        OMRGrader
+    )
+    from src.pipeline_coordinator import OMRPipeline, _resolve_bubble_grid, detect_sheet_questions
 
 
 class TestTV4Algorithms(unittest.TestCase):
@@ -291,7 +318,12 @@ class TestTV4Algorithms(unittest.TestCase):
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         key_path = os.path.join(base_dir, "data", "answer_key.csv")
         samples_dir = os.path.join(base_dir, "data", "samples")
-        pipeline = OMRPipeline(key_path)
+        pipeline = OMRPipeline()
+        pipeline.grader.answer_key = {
+            1: 'A', 2: 'C', 3: 'B', 4: 'D', 5: 'A', 6: 'B', 7: 'C', 8: 'D', 9: 'A', 10: 'C',
+            11: 'B', 12: 'D', 13: 'A', 14: 'C', 15: 'B', 16: 'D', 17: 'A', 18: 'B', 19: 'C', 20: 'D'
+        }
+        pipeline.grader.total_questions = 20
 
         expected_scores = {
             "01_B21DCCN001_Chuan.png": 8.5,
@@ -315,6 +347,132 @@ class TestTV4Algorithms(unittest.TestCase):
             self.assertIn("annotated_image", res)
             self.assertEqual(res["annotated_image"].shape[:2], (1000, 800))
             self.assertIn("total_pipeline_ms", res["latencies"])
+
+    def test_adaptive_bubble_grid_resolver_and_edge_cases(self):
+        """Verify _resolve_bubble_grid correctly parses standard grid and handles total_questions 1, 2, 5, 20."""
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        s1_path = os.path.join(base_dir, "data", "samples", "01_B21DCCN001_Chuan.png")
+        if os.path.exists(s1_path):
+            img = cv2.imread(s1_path, cv2.IMREAD_GRAYSCALE)
+            grid, r = _resolve_bubble_grid(img, total_questions=20)
+            self.assertEqual(len(grid), 20)
+            self.assertIn("A", grid[1])
+            self.assertIn("D", grid[20])
+
+        # Boundary total_questions (1, 2, 5, 40)
+        blank = np.zeros((1000, 800), dtype=np.uint8)
+        for num_q in [1, 2, 5, 40]:
+            grid, r = _resolve_bubble_grid(blank, total_questions=num_q)
+            self.assertEqual(len(grid), num_q)
+
+    def test_pipeline_edge_case_inputs(self):
+        """Stress test pipeline on single-channel 2D, 4-channel BGRA, all black, all white, and random noise."""
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        key_path = os.path.join(base_dir, "data", "answer_key.csv")
+        s1_path = os.path.join(base_dir, "data", "samples", "01_B21DCCN001_Chuan.png")
+        pipe = OMRPipeline()
+        pipe.grader.answer_key = {
+            1: 'A', 2: 'C', 3: 'B', 4: 'D', 5: 'A', 6: 'B', 7: 'C', 8: 'D', 9: 'A', 10: 'C',
+            11: 'B', 12: 'D', 13: 'A', 14: 'C', 15: 'B', 16: 'D', 17: 'A', 18: 'B', 19: 'C', 20: 'D'
+        }
+        pipe.grader.total_questions = 20
+
+        if os.path.exists(s1_path):
+            # 2D grayscale input
+            gray = cv2.imread(s1_path, cv2.IMREAD_GRAYSCALE)
+            res_gray = pipe.process_sheet(gray, "GRAY_INPUT")
+            self.assertEqual(res_gray["grading_result"]["score_10"], 8.5)
+
+            # 4-channel BGRA input
+            bgr = cv2.imread(s1_path)
+            bgra = cv2.cvtColor(bgr, cv2.COLOR_BGR2BGRA)
+            res_bgra = pipe.process_sheet(bgra, "BGRA_INPUT")
+            self.assertEqual(res_bgra["grading_result"]["score_10"], 8.5)
+
+        # All black sheet -> all questions blank
+        black = np.zeros((1000, 800, 3), dtype=np.uint8)
+        res_black = pipe.process_sheet(black, "BLACK_SHEET")
+        self.assertEqual(res_black["grading_result"]["score_10"], 0.0)
+        self.assertEqual(res_black["grading_result"]["blank_count"], 20)
+
+        # All white sheet -> all questions blank
+        white = np.full((1000, 800, 3), 255, dtype=np.uint8)
+        res_white = pipe.process_sheet(white, "WHITE_SHEET")
+        self.assertEqual(res_white["grading_result"]["score_10"], 0.0)
+        self.assertEqual(res_white["grading_result"]["blank_count"], 20)
+
+        # Pure random noise -> does not crash
+        np.random.seed(99)
+        noise = np.random.randint(0, 256, (1000, 800, 3), dtype=np.uint8)
+        res_noise = pipe.process_sheet(noise, "NOISE_SHEET")
+        self.assertIn("score_10", res_noise["grading_result"])
+
+    def test_pipeline_opencv_mode_equivalence(self):
+        """Verify pipeline OpenCV mode (use_scratch_mode=False) runs cleanly and matches scores."""
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        key_path = os.path.join(base_dir, "data", "answer_key.csv")
+        s1_path = os.path.join(base_dir, "data", "samples", "01_B21DCCN001_Chuan.png")
+        pipe = OMRPipeline()
+        pipe.grader.answer_key = {
+            1: 'A', 2: 'C', 3: 'B', 4: 'D', 5: 'A', 6: 'B', 7: 'C', 8: 'D', 9: 'A', 10: 'C',
+            11: 'B', 12: 'D', 13: 'A', 14: 'C', 15: 'B', 16: 'D', 17: 'A', 18: 'B', 19: 'C', 20: 'D'
+        }
+        pipe.grader.total_questions = 20
+
+        if os.path.exists(s1_path):
+            img = cv2.imread(s1_path)
+            res_scratch = pipe.process_sheet(img, "COMPARE", use_scratch_mode=True)
+            res_cv = pipe.process_sheet(img, "COMPARE", use_scratch_mode=False)
+            self.assertEqual(res_scratch["grading_result"]["score_10"], res_cv["grading_result"]["score_10"])
+
+    def test_excel_export_empty_and_large_batch(self):
+        """Verify Excel export handles empty batch and large batch without crash."""
+        excel_path = os.path.join(self.tmp_dir, "stress_batch.xlsx")
+        # Empty batch
+        OMRGrader.generate_excel_report([], excel_path)
+        self.assertTrue(os.path.exists(excel_path))
+
+        # Large batch of 30 students
+        batch = []
+        for i in range(30):
+            batch.append({
+                "student_id": f"SV{i:03d}",
+                "score_10": round(float(np.random.uniform(5.0, 10.0)), 1),
+                "correct_count": int(np.random.randint(10, 21)),
+                "incorrect_count": int(np.random.randint(0, 5)),
+                "blank_count": int(np.random.randint(0, 3)),
+                "multiple_count": int(np.random.randint(0, 2)),
+                "total_questions": 20,
+                "accuracy_pct": 85.0,
+                "details": [{"question": q, "student_ans": "A", "correct_ans": "A", "status": "CORRECT", "is_correct": True} for q in range(1, 21)]
+            })
+        OMRGrader.generate_excel_report(batch, excel_path)
+        self.assertTrue(os.path.exists(excel_path))
+
+    def test_sheet_structure_mismatch_warning(self):
+        """Verify detect_sheet_questions accurately counts sheet rows and warns when key length mismatches."""
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        s1_path = os.path.join(base_dir, "data", "samples", "01_B21DCCN001_Chuan.png")
+        if os.path.exists(s1_path):
+            img = cv2.imread(s1_path)
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            detected_q = detect_sheet_questions(gray)
+            self.assertEqual(detected_q, 20)
+
+            # Test mismatch warning when key only has 10 questions
+            pipe = OMRPipeline()
+            pipe.grader.answer_key = {i: 'A' for i in range(1, 11)}
+            pipe.grader.total_questions = 10
+            res = pipe.process_sheet(img, "TEST_MISMATCH")
+            self.assertIsNotNone(res.get("warning"))
+            self.assertIn("Cảnh báo cấu trúc", res["warning"])
+            self.assertEqual(res.get("detected_questions"), 20)
+
+            # Test NO warning when key matches 20 questions
+            pipe.grader.answer_key = {i: 'A' for i in range(1, 21)}
+            pipe.grader.total_questions = 20
+            res_ok = pipe.process_sheet(img, "TEST_MATCH")
+            self.assertIsNone(res_ok.get("warning"))
 
 
 if __name__ == "__main__":
