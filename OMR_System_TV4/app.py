@@ -94,7 +94,9 @@ try:
     )
     from pipeline_coordinator import OMRPipeline
 except ImportError:
-    from src.tv4_enhancement_eval import (
+    if TV4_SRC not in sys.path:
+        sys.path.insert(0, TV4_SRC)
+    from tv4_enhancement_eval import (
         histogram_equalization_scratch,
         median_filter_scratch,
         save_matrix_to_csv,
@@ -109,7 +111,7 @@ except ImportError:
         run_ablation_study,
         OMRGrader
     )
-    from src.pipeline_coordinator import OMRPipeline
+    from pipeline_coordinator import OMRPipeline
 
 # Page configuration
 st.set_page_config(
@@ -992,22 +994,29 @@ with tab1:
         for d in gr["details"]:
             q = d["question"]
             r_q = ratios.get(q, {"A": 0.0, "B": 0.0, "C": 0.0, "D": 0.0})
+            stt_str = d["status"]
+            if d.get("is_erased"):
+                stt_str = f"{d['status']} (Tẩy xóa Δτ)"
             detail_rows.append({
                 "Câu": f"Câu {q:02d}",
                 "SV Chọn": d["student_ans"],
                 "Đáp Án Chuẩn": d["correct_ans"],
-                "Trạng Thái": d["status"],
+                "Trạng Thái": stt_str,
                 "Kết Quả": "✅ Đúng" if d["is_correct"] else "❌ Sai/Lỗi",
                 "Fill A": f"{r_q.get('A', 0.0):.3f}",
                 "Fill B": f"{r_q.get('B', 0.0):.3f}",
                 "Fill C": f"{r_q.get('C', 0.0):.3f}",
                 "Fill D": f"{r_q.get('D', 0.0):.3f}",
+                "Ghi Chú": d.get("warning", "")
             })
         st.dataframe(pd.DataFrame(detail_rows), use_container_width=True, height=260)
 
         # Human-in-the-loop manual review / override
         with st.expander("🛠️ Kiểm duyệt & Phúc khảo thủ công (Human-in-the-loop Override)"):
-            st.caption("Nếu phiếu bị mờ hoặc tẩy xóa dẫn đến cảnh báo BLANK / MULTIPLE, giám thị có thể xác nhận lại đáp án tại đây:")
+            st.caption("Nếu phiếu bị mờ hoặc tẩy xóa dẫn đến cảnh báo BLANK / MULTIPLE hoặc vết tẩy xóa Δτ, giám thị có thể xác nhận lại đáp án tại đây:")
+            erased_qs = [d["question"] for d in gr["details"] if d.get("is_erased")]
+            if erased_qs:
+                st.warning(f"⚠️ Lưu ý: Câu {', '.join(str(q) for q in erased_qs)} có vết tẩy xóa đã được thuật toán tự động giải mã theo luật chênh lệch độ đậm Δτ ≥ 0.15.")
             ov_col1, ov_col2, ov_col3 = st.columns([2, 2, 1], vertical_alignment="bottom")
             with ov_col1:
                 q_to_edit = st.selectbox("Chọn câu hỏi cần chỉnh sửa:", list(range(1, gr["total_questions"] + 1)), key="tab1_override_q")
@@ -1042,14 +1051,13 @@ with tab1:
             lat_df.columns = ["Thời gian (ms)"]
             st.table(lat_df)
 
-        # Export Excel Report
-        excel_out_path = os.path.join(DATA_DIR, "Ket_Qua_Cham_Thi.xlsx")
+        # Export Excel Report (in-memory buffer, prevents dirtying git tracked files)
+        excel_buf = io.BytesIO()
         OMRGrader.generate_excel_report(
             [r["grading_result"] for r in st.session_state.tab1_processed_items],
-            excel_out_path
+            excel_buf
         )
-        with open(excel_out_path, "rb") as f:
-            excel_bytes = f.read()
+        excel_bytes = excel_buf.getvalue()
 
         st.download_button(
             label=f"📥 Tải Bảng Điểm Excel ({len(st.session_state.tab1_processed_items)} Sinh Viên) (.xlsx)",
@@ -2204,21 +2212,27 @@ with tab3:
             with st.spinner("Đang trích xuất ảnh nắn thẳng và chạy khảo sát..."):
                 test_sheet_bgr = cv2.imread(p_abl)
                 proc_out = pipeline.process_sheet(test_sheet_bgr, use_scratch_mode=True)
-                if "Kịch bản 3" in abl_src:
-                    gt_answers = {
-                        1: 'A', 2: 'C', 3: 'B', 4: 'A', 5: 'A', 6: 'B', 7: 'C', 8: 'D', 9: 'B', 10: 'C',
-                        11: 'B', 12: 'D', 13: 'A', 14: 'C', 15: 'C', 16: 'D', 17: 'A', 18: 'B', 19: 'C', 20: 'BLANK'
-                    }
-                elif "Kịch bản 1" in abl_src:
-                    gt_answers = {
-                        1: 'A', 2: 'C', 3: 'B', 4: 'D', 5: 'A', 6: 'B', 7: 'C', 8: 'A', 9: 'A', 10: 'C',
-                        11: 'B', 12: 'D', 13: 'A', 14: 'C', 15: 'B', 16: 'D', 17: 'A', 18: 'B', 19: 'BLANK', 20: 'B'
-                    }
+                
+                gt_csv_path = p_abl.replace(".png", "_gt.csv")
+                if os.path.exists(gt_csv_path):
+                    df_gt = pd.read_csv(gt_csv_path)
+                    gt_answers = dict(zip(df_gt.iloc[:, 0].astype(int), df_gt.iloc[:, 1].astype(str).str.strip()))
                 else:
-                    gt_answers = {
-                        1: 'A', 2: 'C', 3: 'B', 4: 'D', 5: 'A', 6: 'B', 7: 'C', 8: 'D', 9: 'A', 10: 'C',
-                        11: 'B', 12: 'D', 13: 'A', 14: 'C', 15: 'B', 16: 'D', 17: 'A', 18: 'B', 19: 'C', 20: 'C'
-                    }
+                    if "Kịch bản 3" in abl_src:
+                        gt_answers = {
+                            1: 'A', 2: 'C', 3: 'B', 4: 'A', 5: 'A', 6: 'B', 7: 'C', 8: 'D', 9: 'B', 10: 'C',
+                            11: 'B', 12: 'D', 13: 'A', 14: 'C', 15: 'C', 16: 'D', 17: 'A', 18: 'B', 19: 'C', 20: 'BLANK'
+                        }
+                    elif "Kịch bản 1" in abl_src:
+                        gt_answers = {
+                            1: 'A', 2: 'C', 3: 'B', 4: 'D', 5: 'A', 6: 'B', 7: 'C', 8: 'A', 9: 'A', 10: 'C',
+                            11: 'B', 12: 'D', 13: 'A', 14: 'C', 15: 'B', 16: 'D', 17: 'A', 18: 'B', 19: 'BLANK', 20: 'B'
+                        }
+                    else:
+                        gt_answers = {
+                            1: 'A', 2: 'C', 3: 'B', 4: 'D', 5: 'A', 6: 'B', 7: 'C', 8: 'D', 9: 'A', 10: 'C',
+                            11: 'B', 12: 'D', 13: 'A', 14: 'C', 15: 'B', 16: 'D', 17: 'A', 18: 'B', 19: 'C', 20: 'C'
+                        }
                 st.session_state.tab3_ablation = run_ablation_study(
                     warped_gray=proc_out["warped_gray"],
                     ground_truth_answers=gt_answers
@@ -2481,11 +2495,45 @@ with tab4:
         st.pyplot(fig2)
         plt.close(fig2)
 
+    # Anomaly & Proctor Warning Attention List (Kế hoạch mục 9: Danh sách các phiếu có cảnh báo tô mờ/tẩy xóa/lệch cấu trúc)
+    anomaly_sheets = []
+    for r in batch:
+        sid = r.get("student_id", "N/A")
+        det = r.get("details", [])
+        erased_qs = [d["question"] for d in det if d.get("is_erased")]
+        blank_qs = [d["question"] for d in det if d.get("status") == "BLANK"]
+        multi_qs = [d["question"] for d in det if d.get("status") == "MULTIPLE"]
+        warn = r.get("warning")
+
+        if erased_qs or multi_qs or blank_qs or warn:
+            reasons = []
+            if warn:
+                reasons.append(f"⚠️ {warn}")
+            if erased_qs:
+                reasons.append(f"✏️ Vết tẩy xóa (Câu: {', '.join(str(q) for q in erased_qs)})")
+            if multi_qs:
+                reasons.append(f"❌ Tô đúp/phạm quy (Câu: {', '.join(str(q) for q in multi_qs)})")
+            if blank_qs:
+                reasons.append(f"⚪ Bỏ trống (Câu: {', '.join(str(q) for q in blank_qs)})")
+
+            anomaly_sheets.append({
+                "Mã Sinh Viên": sid,
+                "Điểm Số": f"{r.get('score_10', 0.0):.1f}",
+                "Số Câu Đúng": f"{r.get('correct_count', 0)}/{r.get('total_questions', 20)}",
+                "Chi Tiết Cảnh Báo": " | ".join(reasons)
+            })
+
+    if anomaly_sheets:
+        st.write("")
+        with st.expander(f"⚠️ Danh Sách Phiếu Cần Giám Thị Kiểm Duyệt Lại ({len(anomaly_sheets)} bài có cảnh báo)", expanded=False):
+            st.caption("Các bài thi có vết tẩy xóa, tô đúp, bỏ trống hoặc cảnh báo lệch đề thi cần giám thị đối chiếu bản cứng:")
+            st.dataframe(pd.DataFrame(anomaly_sheets), use_container_width=True)
+
     st.write("")
-    excel_out_path = os.path.join(DATA_DIR, "Ket_Qua_Cham_Thi.xlsx")
-    OMRGrader.generate_excel_report(batch, excel_out_path)
-    with open(excel_out_path, "rb") as f:
-        excel_bytes = f.read()
+    # Export Excel Report (in-memory buffer, prevents dirtying git tracked files)
+    excel_buf = io.BytesIO()
+    OMRGrader.generate_excel_report(batch, excel_buf)
+    excel_bytes = excel_buf.getvalue()
 
     data_source_tag = "Mock 60 Sinh Viên" if st.session_state.use_mock_data else f"{len(batch)} Sinh Viên"
     st.download_button(

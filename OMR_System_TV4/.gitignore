@@ -46,3 +46,6 @@ Thumbs.db
 # Streamlit local settings & run logs
 .streamlit/secrets.toml
 
+# Demo run outputs
+outputs/
+

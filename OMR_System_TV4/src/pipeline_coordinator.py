@@ -27,7 +27,7 @@ except (ImportError, ValueError):
 # Optional dynamic imports (integrating TV1, TV2, and TV3 modules)
 try:
     from .tv1_preprocessing import rgb_to_gray_scratch, detect_sheet_corners
-except ImportError:
+except (ImportError, ValueError):
     try:
         import sys
         from pathlib import Path
@@ -40,12 +40,25 @@ except ImportError:
         detect_sheet_corners = None
 
 try:
-    from .tv2_perspective import warp_perspective_sheet
+    from tv2_perspective import warp_perspective_sheet
 except ImportError:
-    warp_perspective_sheet = None
+    try:
+        from .tv2_perspective import warp_perspective_sheet
+    except (ImportError, ValueError):
+        try:
+            import sys
+            from pathlib import Path
+            tv2_dir = str(Path(__file__).resolve().parent.parent.parent / "OMR_System_TV2")
+            if tv2_dir not in sys.path:
+                sys.path.insert(0, tv2_dir)
+            from tv2_perspective import warp_perspective_sheet
+        except ImportError:
+            warp_perspective_sheet = None
 
 try:
-    from .tv3_segmentation import extract_bubble_answers
+    from tv3_thresholding import adaptive_mean_threshold_scratch
+    from tv3_morphology_ccl import two_pass_ccl_scratch
+    from tv3_segmentation import TV3PipelineConfig, TV3SegmentationPipeline, extract_bubble_answers
 except ImportError:
     try:
         import sys
@@ -53,9 +66,59 @@ except ImportError:
         tv3_dir = str(Path(__file__).resolve().parent.parent.parent / "OMR_System_TV3" / "src")
         if tv3_dir not in sys.path:
             sys.path.insert(0, tv3_dir)
-        from tv3_segmentation import extract_bubble_answers
+        from tv3_thresholding import adaptive_mean_threshold_scratch
+        from tv3_morphology_ccl import two_pass_ccl_scratch
+        from tv3_segmentation import TV3PipelineConfig, TV3SegmentationPipeline, extract_bubble_answers
     except ImportError:
+        adaptive_mean_threshold_scratch = None
+        two_pass_ccl_scratch = None
+        TV3PipelineConfig = None
+        TV3SegmentationPipeline = None
         extract_bubble_answers = None
+
+
+def _resize_bilinear_scratch(image: np.ndarray, target_size: Tuple[int, int]) -> np.ndarray:
+    """Resize 2D or 3D image using vectorized bilinear interpolation (100% NumPy from scratch).
+
+    Implements OpenCV-compatible half-pixel center aligned coordinate mapping:
+      src_coord = (dst_coord + 0.5) * scale - 0.5
+    """
+    dst_w, dst_h = target_size
+    src_h, src_w = image.shape[:2]
+    if src_h == dst_h and src_w == dst_w:
+        return image.copy()
+
+    scale_y = float(src_h) / float(dst_h)
+    scale_x = float(src_w) / float(dst_w)
+
+    y = (np.arange(dst_h, dtype=np.float32) + 0.5) * scale_y - 0.5
+    x = (np.arange(dst_w, dtype=np.float32) + 0.5) * scale_x - 0.5
+
+    y = np.clip(y, 0, src_h - 1)
+    x = np.clip(x, 0, src_w - 1)
+
+    y0 = np.floor(y).astype(int)
+    y1 = np.minimum(y0 + 1, src_h - 1)
+    x0 = np.floor(x).astype(int)
+    x1 = np.minimum(x0 + 1, src_w - 1)
+
+    dy = (y - y0).reshape(-1, 1)
+    dx = (x - x0).reshape(1, -1)
+
+    if image.ndim == 2:
+        top = (1.0 - dx) * image[y0[:, None], x0[None, :]] + dx * image[y0[:, None], x1[None, :]]
+        bot = (1.0 - dx) * image[y1[:, None], x0[None, :]] + dx * image[y1[:, None], x1[None, :]]
+        out = (1.0 - dy) * top + dy * bot
+        return np.clip(np.round(out), 0, 255).astype(np.uint8)
+    else:
+        channels = []
+        for c in range(image.shape[2]):
+            ch = image[:, :, c]
+            top = (1.0 - dx) * ch[y0[:, None], x0[None, :]] + dx * ch[y0[:, None], x1[None, :]]
+            bot = (1.0 - dx) * ch[y1[:, None], x0[None, :]] + dx * ch[y1[:, None], x1[None, :]]
+            out = (1.0 - dy) * top + dy * bot
+            channels.append(np.clip(np.round(out), 0, 255).astype(np.uint8))
+        return np.stack(channels, axis=2)
 
 
 def _order_corners(pts: np.ndarray) -> np.ndarray:
@@ -138,7 +201,8 @@ def _warp_perspective_cv(image: np.ndarray, corners: np.ndarray, target_width: i
 
 def _resolve_bubble_grid(
     warped_gray: np.ndarray,
-    total_questions: int = 20
+    total_questions: int = 20,
+    use_scratch: bool = True
 ) -> Tuple[Dict[int, Dict[str, Tuple[float, float]]], int]:
     """Dynamically resolve bubble grid coordinates for any exam sheet.
 
@@ -146,6 +210,7 @@ def _resolve_bubble_grid(
     coordinates are preserved for 100% mathematical consistency.
     If the sheet is a cropped upload, phone photo, or non-standard scan, the grid parameters
     (start_y, row_height, col1_x, col2_x, step_x) adaptively adjust to the true bubble marks.
+    In Scratch mode, candidate bubble extraction runs 100% from scratch via TV3's adaptive threshold & CCL.
     """
     h, w = warped_gray.shape[:2]
     questions_per_col = (total_questions + 1) // 2
@@ -159,25 +224,32 @@ def _resolve_bubble_grid(
     bubble_radius = int(min(w, h) * 0.018)
     def_dx = bubble_radius * 2.8
 
-    # Extract bubble contour candidates via adaptive thresholding
-    thresh = cv2.adaptiveThreshold(
-        warped_gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 51, 42
-    )
-    cnts, _ = cv2.findContours(thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-
-    min_area = int(np.pi * (bubble_radius * 0.4) ** 2)
-    max_area = int(np.pi * (bubble_radius * 2.8) ** 2)
-
     bubbles = []
-    for c in cnts:
-        area = cv2.contourArea(c)
-        if min_area <= area <= max_area:
-            bx, by, bw, bh = cv2.boundingRect(c)
-            aspect = float(bw) / float(bh)
-            if 0.65 <= aspect <= 1.5:
-                peri = cv2.arcLength(c, True)
-                if 4 * np.pi * area / (peri * peri + 1e-5) > 0.30:
-                    bubbles.append((bx + bw / 2.0, by + bh / 2.0))
+    if use_scratch and adaptive_mean_threshold_scratch is not None and two_pass_ccl_scratch is not None:
+        thresh = adaptive_mean_threshold_scratch(warped_gray, block_size=31, C=15.0)
+        _, _, raw_stats = two_pass_ccl_scratch(thresh, connectivity=8)
+        for s in raw_stats:
+            bw, bh = s["bbox"][2], s["bbox"][3]
+            if (80 <= s["area"] <= 1500 and 0.65 <= s["aspect_ratio"] <= 1.55 
+                and 14 <= bw <= 50 and 14 <= bh <= 50 and s["extent"] >= 0.20):
+                bubbles.append(s["centroid"])
+    else:
+        # Extract bubble contour candidates via OpenCV baseline
+        thresh = cv2.adaptiveThreshold(
+            warped_gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 51, 42
+        )
+        cnts, _ = cv2.findContours(thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        min_area = int(np.pi * (bubble_radius * 0.4) ** 2)
+        max_area = int(np.pi * (bubble_radius * 2.8) ** 2)
+        for c in cnts:
+            area = cv2.contourArea(c)
+            if min_area <= area <= max_area:
+                bx, by, bw, bh = cv2.boundingRect(c)
+                aspect = float(bw) / float(bh)
+                if 0.65 <= aspect <= 1.5:
+                    peri = cv2.arcLength(c, True)
+                    if 4 * np.pi * area / (peri * peri + 1e-5) > 0.30:
+                        bubbles.append((bx + bw / 2.0, by + bh / 2.0))
 
     inner = [b for b in bubbles if 0.05 * h <= b[1] <= 0.95 * h]
 
@@ -202,12 +274,13 @@ def _resolve_bubble_grid(
             if not placed:
                 rows.append([b])
 
-        valid_rows = [r for r in rows if len(r) >= 4]
+        valid_rows = [r for r in rows if len(r) >= 4 and np.mean([p[1] for p in r]) >= 0.14 * h]
         valid_rows.sort(key=lambda r: np.mean([p[1] for p in r]))
         if len(valid_rows) == questions_per_col:
             row_exact_ys = [float(np.mean([p[1] for p in r])) for r in valid_rows]
 
-        y_arr = np.array([b[1] for b in inner])
+        q_bubbles = [b for b in inner if b[1] >= 0.14 * h]
+        y_arr = np.array([b[1] for b in (q_bubbles if len(q_bubbles) >= 12 else inner)])
         y_p5, y_p95 = np.percentile(y_arr, 5), np.percentile(y_arr, 95)
         if questions_per_col > 1:
             est_row_height = (y_p95 - y_p5) / float(questions_per_col - 1)
@@ -280,33 +353,43 @@ def _resolve_bubble_grid(
     return grid, bubble_radius
 
 
-def detect_sheet_questions(warped_gray: np.ndarray) -> int:
+def detect_sheet_questions(warped_gray: np.ndarray, use_scratch: bool = True) -> int:
     """Detects the approximate number of question bubbles/rows on the rectified exam sheet.
 
     Returns estimated total questions (e.g. 10, 20, 30), or 0 if indeterminate.
     Assumes standard 2-column layout (each question row contains options across both columns).
+    In Scratch mode, candidate bubble extraction runs 100% from scratch via TV3's adaptive threshold & CCL.
     """
     if warped_gray is None or warped_gray.size == 0:
         return 0
     h, w = warped_gray.shape[:2]
     bubble_radius = int(min(w, h) * 0.018)
-    thresh = cv2.adaptiveThreshold(
-        warped_gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 51, 42
-    )
-    cnts, _ = cv2.findContours(thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
 
-    min_area = int(np.pi * (bubble_radius * 0.4) ** 2)
-    max_area = int(np.pi * (bubble_radius * 2.8) ** 2)
     bubbles = []
-    for c in cnts:
-        area = cv2.contourArea(c)
-        if min_area <= area <= max_area:
-            bx, by, bw, bh = cv2.boundingRect(c)
-            aspect = float(bw) / float(bh)
-            if 0.65 <= aspect <= 1.5:
-                peri = cv2.arcLength(c, True)
-                if 4 * np.pi * area / (peri * peri + 1e-5) > 0.30:
-                    bubbles.append((bx + bw / 2.0, by + bh / 2.0))
+    if use_scratch and adaptive_mean_threshold_scratch is not None and two_pass_ccl_scratch is not None:
+        thresh = adaptive_mean_threshold_scratch(warped_gray, block_size=31, C=15.0)
+        _, _, raw_stats = two_pass_ccl_scratch(thresh, connectivity=8)
+        for s in raw_stats:
+            bw, bh = s["bbox"][2], s["bbox"][3]
+            if (80 <= s["area"] <= 1500 and 0.65 <= s["aspect_ratio"] <= 1.55 
+                and 14 <= bw <= 50 and 14 <= bh <= 50 and s["extent"] >= 0.20):
+                bubbles.append(s["centroid"])
+    else:
+        thresh = cv2.adaptiveThreshold(
+            warped_gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 51, 42
+        )
+        cnts, _ = cv2.findContours(thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        min_area = int(np.pi * (bubble_radius * 0.4) ** 2)
+        max_area = int(np.pi * (bubble_radius * 2.8) ** 2)
+        for c in cnts:
+            area = cv2.contourArea(c)
+            if min_area <= area <= max_area:
+                bx, by, bw, bh = cv2.boundingRect(c)
+                aspect = float(bw) / float(bh)
+                if 0.65 <= aspect <= 1.5:
+                    peri = cv2.arcLength(c, True)
+                    if 4 * np.pi * area / (peri * peri + 1e-5) > 0.30:
+                        bubbles.append((bx + bw / 2.0, by + bh / 2.0))
 
     inner = [b for b in bubbles if 0.05 * h <= b[1] <= 0.95 * h]
     if len(inner) < 12:
@@ -324,8 +407,8 @@ def detect_sheet_questions(warped_gray: np.ndarray) -> int:
         if not placed:
             rows.append([b])
 
-    # Filter rows that correspond to question rows (have at least 5 bubbles and in question area)
-    q_rows = [r for r in rows if len(r) >= 5 and 0.10 * h <= np.mean([p[1] for p in r]) <= 0.92 * h]
+    # Filter rows that correspond to question rows (have at least 4 bubbles and in question area)
+    q_rows = [r for r in rows if len(r) >= 4 and 0.14 * h <= np.mean([p[1] for p in r]) <= 0.92 * h]
     num_rows = len(q_rows)
     if num_rows == 0:
         return 0
@@ -337,10 +420,11 @@ def _extract_bubble_answers_cv(
     warped_gray: np.ndarray,
     total_questions: int = 20,
     fill_threshold: float = 0.38,
+    delta_tau_min: float = 0.15,
     question_grid: Optional[Dict[int, Dict[str, Tuple[float, float]]]] = None,
     bubble_radius: Optional[int] = None
-) -> Tuple[Dict[int, str], Dict[int, Dict[str, float]], np.ndarray]:
-    """Baseline bubble mark extraction using OpenCV."""
+) -> Tuple[Dict[int, str], Dict[int, Dict[str, float]], np.ndarray, Dict[int, str]]:
+    """Baseline bubble mark extraction using OpenCV with unified parameters and Δτ rule."""
     h, w = warped_gray.shape[:2]
     binary_adaptive = cv2.adaptiveThreshold(
         warped_gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 51, 42
@@ -352,17 +436,18 @@ def _extract_bubble_answers_cv(
     options = ["A", "B", "C", "D"]
     student_answers: Dict[int, str] = {}
     fill_ratios_all: Dict[int, Dict[str, float]] = {}
+    erased_questions: Dict[int, str] = {}
 
     if bubble_radius is None:
         bubble_radius = int(min(w, h) * 0.018)
-    inner_radius = max(bubble_radius - 3, 4)
+    inner_radius = max(bubble_radius - 2, 4)
 
     yy, xx = np.ogrid[-inner_radius:inner_radius + 1, -inner_radius:inner_radius + 1]
     circle_mask = (xx ** 2 + yy ** 2) <= (inner_radius ** 2)
     mask_area = float(np.sum(circle_mask))
 
     if question_grid is None:
-        question_grid, _ = _resolve_bubble_grid(warped_gray, total_questions)
+        question_grid, _ = _resolve_bubble_grid(warped_gray, total_questions, use_scratch=False)
 
     for q in range(1, total_questions + 1):
         q_ratios: Dict[str, float] = {}
@@ -380,15 +465,24 @@ def _extract_bubble_answers_cv(
             q_ratios[opt] = round(ratio, 4)
 
         fill_ratios_all[q] = q_ratios
-        cands = [opt for opt, r in q_ratios.items() if r >= fill_threshold]
-        if len(cands) == 1:
-            student_answers[q] = cands[0]
-        elif len(cands) > 1:
-            student_answers[q] = "MULTIPLE"
-        else:
-            student_answers[q] = "BLANK"
 
-    return student_answers, fill_ratios_all, vis_img
+        # Decision rule with Δτ (identical to TV3 classify_question_bubbles)
+        sorted_opts = sorted(q_ratios.keys(), key=lambda o: q_ratios[o], reverse=True)
+        opt1, opt2 = sorted_opts[0], sorted_opts[1]
+        tau1, tau2 = q_ratios[opt1], q_ratios[opt2]
+
+        if tau1 < fill_threshold:
+            student_answers[q] = "BLANK"
+        elif tau1 >= fill_threshold and tau2 < fill_threshold:
+            student_answers[q] = opt1
+        elif tau1 >= fill_threshold and tau2 >= fill_threshold:
+            if (tau1 - tau2) >= delta_tau_min:
+                student_answers[q] = opt1
+                erased_questions[q] = opt1
+            else:
+                student_answers[q] = "MULTIPLE"
+
+    return student_answers, fill_ratios_all, vis_img, erased_questions
 
 
 class OMRPipeline:
@@ -427,7 +521,10 @@ class OMRPipeline:
         if cur_h > 1250:
             scale = 1000.0 / float(cur_h)
             new_w = int(round(cur_w * scale))
-            img_work = cv2.resize(img_work, (new_w, 1000), interpolation=cv2.INTER_LINEAR)
+            if use_scratch_mode:
+                img_work = _resize_bilinear_scratch(img_work, (new_w, 1000))
+            else:
+                img_work = cv2.resize(img_work, (new_w, 1000), interpolation=cv2.INTER_LINEAR)
 
         # --- Stage 1: Preprocessing (Grayscale & Impulse Noise Removal) ---
         t0 = time.perf_counter()
@@ -467,9 +564,12 @@ class OMRPipeline:
         answers = None
         ratios = None
         vis_warped = None
+        erased_questions = {}
+        actual_mode = "Scratch (NumPy)" if use_scratch_mode else "OpenCV Baseline"
+        fallback_warning = None
 
         # Detect physical sheet question count and check structure mismatch
-        detected_q = detect_sheet_questions(warped_gray)
+        detected_q = detect_sheet_questions(warped_gray, use_scratch=use_scratch_mode)
         sheet_warning = None
         if detected_q > 0 and abs(detected_q - total_q) >= 4:
             sheet_warning = (
@@ -479,17 +579,21 @@ class OMRPipeline:
             )
 
         # Dynamically resolve question bubble grid (adaptive to custom uploads or standard template)
-        grid, b_radius = _resolve_bubble_grid(warped_gray, total_q)
+        grid, b_radius = _resolve_bubble_grid(warped_gray, total_q, use_scratch=use_scratch_mode)
 
-        if use_scratch_mode:
-            # First try direct invocation of TV3's core segmentation pipeline with resolved grid
+        if use_scratch_mode and TV3PipelineConfig is not None and TV3SegmentationPipeline is not None:
+            # Direct invocation of TV3 core segmentation pipeline with unified parameters
             try:
-                from tv3_segmentation import TV3PipelineConfig, TV3SegmentationPipeline
+                inner_r = max(b_radius - 2, 5)
                 config_tv3 = TV3PipelineConfig(
                     num_questions=total_q,
                     tau_min=fill_threshold,
                     delta_tau_min=0.15,
-                    bubble_radius=b_radius,
+                    bubble_radius=inner_r,
+                    block_size=51,
+                    C=42.0,
+                    apply_opening=True,
+                    apply_closing=False,
                     threshold_method="adaptive"
                 )
                 pipeline_tv3 = TV3SegmentationPipeline(config_tv3)
@@ -499,7 +603,10 @@ class OMRPipeline:
                 ratios = {}
                 for q_id, q_res in res_tv3.omr_result.questions.items():
                     ratios[q_id] = {k: round(v, 4) for k, v in q_res.fill_ratios.items()}
-                    if q_res.status in ("VALID", "ERASED_VALID") and q_res.selected:
+                    if q_res.status == "ERASED_VALID" and q_res.selected:
+                        answers[q_id] = q_res.selected
+                        erased_questions[q_id] = q_res.selected
+                    elif q_res.status == "VALID" and q_res.selected:
                         answers[q_id] = q_res.selected
                     elif q_res.status == "MULTIPLE_INVALID":
                         answers[q_id] = "MULTIPLE"
@@ -507,34 +614,35 @@ class OMRPipeline:
                         answers[q_id] = "BLANK"
 
                 vis_warped = cv2.cvtColor(warped_gray, cv2.COLOR_GRAY2BGR) if warped_gray.ndim == 2 else warped_gray.copy()
-            except Exception:
-                # Secondary try: module-level extract_bubble_answers
-                if extract_bubble_answers is not None:
-                    try:
-                        answers, ratios, vis_warped = extract_bubble_answers(
-                            warped_gray,
-                            total_questions=total_q,
-                            fill_threshold=fill_threshold,
-                            use_scratch=True
-                        )
-                    except Exception:
-                        answers = None
+            except Exception as exc:
+                actual_mode = "Fallback (OpenCV Baseline)"
+                fallback_warning = f"Lỗi nhánh Scratch: {exc}. Hệ thống đã tự động kích hoạt Fallback sang OpenCV Baseline."
+                answers = None
 
         if answers is None:
-            answers, ratios, vis_warped = _extract_bubble_answers_cv(
+            if use_scratch_mode and not fallback_warning:
+                actual_mode = "Fallback (OpenCV Baseline)"
+                fallback_warning = "Không tìm thấy module TV3 Scratch. Đã tự động kích hoạt Fallback sang OpenCV Baseline."
+            answers, ratios, vis_warped, cv_erased = _extract_bubble_answers_cv(
                 warped_gray,
                 total_questions=total_q,
                 fill_threshold=fill_threshold,
+                delta_tau_min=0.15,
                 question_grid=grid,
                 bubble_radius=b_radius
             )
+            erased_questions.update(cv_erased)
         latencies["stage3_segmentation_ms"] = round((time.perf_counter() - t0) * 1000.0, 2)
 
         # --- Stage 4: Grading & Final Color-Coded Annotation ---
         t0 = time.perf_counter()
-        grading_result = self.grader.grade_student(student_id, answers)
-        if sheet_warning:
-            grading_result["warning"] = sheet_warning
+        grading_result = self.grader.grade_student(student_id, answers, erased_questions=erased_questions)
+        combined_warning = sheet_warning
+        if fallback_warning:
+            combined_warning = f"{fallback_warning} | {sheet_warning}" if sheet_warning else fallback_warning
+
+        if combined_warning:
+            grading_result["warning"] = combined_warning
             grading_result["detected_sheet_questions"] = detected_q
 
         annotated_image = self._annotate_sheet_results(
@@ -544,7 +652,7 @@ class OMRPipeline:
             fill_threshold,
             question_grid=grid,
             bubble_radius=b_radius,
-            warning=sheet_warning,
+            warning=combined_warning,
             detected_questions=detected_q
         )
         latencies["stage4_grading_ms"] = round((time.perf_counter() - t0) * 1000.0, 2)
@@ -553,7 +661,7 @@ class OMRPipeline:
 
         return {
             "student_id": student_id,
-            "mode": "Scratch (NumPy)" if use_scratch_mode else "OpenCV Baseline",
+            "mode": actual_mode,
             "grading_result": grading_result,
             "corners": corners,
             "warped_gray": warped_gray,
@@ -561,7 +669,8 @@ class OMRPipeline:
             "fill_ratios": ratios,
             "latencies": latencies,
             "detected_questions": detected_q,
-            "warning": sheet_warning
+            "warning": combined_warning,
+            "erased_questions": erased_questions
         }
 
     def _annotate_sheet_results(
@@ -629,7 +738,9 @@ class OMRPipeline:
             d_x, d_y = question_grid[q]["D"]
             last_x = int(round(d_x + bubble_radius * 1.5 + 8))
             row_cy = int(round(d_y))
-            if status == "CORRECT":
+            if item.get("is_erased"):
+                cv2.putText(img, f"TAY XOA ({stu_ans})", (last_x, row_cy + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.38, COLOR_WARNING, 1)
+            elif status == "CORRECT":
                 cv2.putText(img, "DUNG", (last_x, row_cy + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.42, COLOR_CORRECT, 1)
             elif status == "INCORRECT":
                 cv2.putText(img, f"SAI ({cor_ans})", (last_x, row_cy + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.42, COLOR_WRONG, 1)
@@ -639,7 +750,7 @@ class OMRPipeline:
                 cv2.putText(img, f"LOI >1 ({cor_ans})", (last_x, row_cy + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.42, COLOR_WARNING, 1)
 
         # Draw top banner (above fiducial border at y=62)
-        if warning:
+        if warning and ("Cảnh báo cấu trúc" in warning or "LECH DE THI" in warning):
             cv2.rectangle(img, (0, 0), (w, 54), (25, 35, 185), -1)
             det_q = detected_questions if detected_questions is not None else grading_result.get("detected_sheet_questions", "?")
             warn_header = f"CANH BAO: ANH ~{det_q} CAU != DAP AN {total_questions} CAU (LECH DE THI!)"
