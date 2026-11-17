@@ -28,7 +28,35 @@ Module này phụ trách toàn bộ Giai đoạn 2 của pipeline hệ thống c
 
 ---
 
-### 3. Hướng dẫn chạy kiểm thử Unit Benchmark
+### 3. Quy cách Đầu vào & Đầu ra (Input / Output Specifications)
+
+#### 🔹 Đầu vào (Input) của Module TV2:
+1. **Ảnh gốc (`img`)**: Ảnh chụp phiếu thi từ smartphone (mức xám $H \times W$ hoặc ảnh màu RGB $H \times W \times 3$). Có thể bị nghiêng góc từ $15^\circ \rightarrow 45^\circ$, ngược hoặc xoay ngang.
+2. **Tọa độ 4 đỉnh khung phiếu (`corners` / `raw_corners`)**: Mảng NumPy shape `(4, 2)` chứa 4 cặp tọa độ $(x, y)$ của 4 góc phiếu thi do Thành viên 1 phát hiện và bàn giao.
+3. *(Tùy chọn)* **Mẫu Marker định vị (`anchor_template`)**: Ảnh ma trận mẫu của Marker góc dùng để so khớp NCC xác định hướng xoay.
+4. *(Tùy chọn)* **Kích thước chuẩn đích (`target_size`)**: Tuple `(W_dst, H_dst)` (chuẩn mặc định là $800 \times 1000$ pixels).
+
+#### 🔹 Đầu ra (Output) của Module TV2:
+1. **Ảnh phiếu thi đã nắn phẳng (`warped_sheet` / `warped_gray`)**: 
+   - Ảnh nắn thẳng hình học loại bỏ biến dạng phối cảnh, chuẩn hóa về kích thước $800 \times 1000$ pixels.
+   - Chiều xoay được chuẩn hóa về đúng $0^\circ$ (chuẩn bị bàn giao cho Thành viên 3 phân đoạn và chấm ô tô).
+2. **Thông tin metadata (`info`)**:
+   - `ordered_corners`: 4 đỉnh đã sắp xếp theo thứ tự `[TL, TR, BR, BL]`.
+   - `homography_matrix`: Ma trận biến đổi phối cảnh $H$ kích thước $3 \times 3$.
+   - `detected_angle`: Góc xoay phát hiện ($0^\circ, 90^\circ, 180^\circ, 270^\circ$).
+   - `marker_scores`: Điểm tương quan NCC tại 4 góc.
+
+#### 📂 Dữ liệu minh họa Input / Output trên đĩa:
+- Thư mục dữ liệu mẫu đầu vào: `OMR_System_TV2/data/input/`
+  - `sample_tilted_sheet.png`: Ảnh chụp phiếu bị nghiêng phối cảnh.
+  - `input_corners.txt`: Tọa độ 4 đỉnh nhận từ TV1.
+- Thư mục kết quả nắn phẳng đầu ra: `OMR_System_TV2/data/output/`
+  - `warped_sheet_scratch.png`: Ảnh nắn phẳng bằng thuật toán Scratch của TV2.
+  - `warped_sheet_opencv.png`: Ảnh nắn phẳng bằng OpenCV đối chứng.
+
+---
+
+### 4. Hướng dẫn chạy kiểm thử Unit Benchmark
 Chạy script kiểm thử đối chứng Scratch vs. OpenCV:
 
 ```bash
@@ -39,4 +67,5 @@ Kết quả mong đợi:
 - Tất cả 6 bài kiểm thử đều báo `[PASS]`.
 - PSNR $> 48\text{ dB}$ (thực tế đạt $> 87\text{ dB}$).
 - Sai số SVD $< 10^{-4}$ (thực tế đạt $10^{-10}$).
+
 
