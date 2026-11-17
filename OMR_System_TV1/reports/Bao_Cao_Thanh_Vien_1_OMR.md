@@ -16,307 +16,471 @@
 2. [Cơ sở lý thuyết và Cài đặt thuật toán thuần NumPy (Code from Scratch)](#2-cơ-sở-lý-thuyết-và-cài-đặt-thuật-toán-thuần-numpy-code-from-scratch)
    - [2.1. Chuyển đổi mức xám cảm nhận thị giác (Luminance ITU-R BT.601)](#21-chuyển-đổi-mức-xám-cảm-nhận-thị-giác-luminance-itu-r-bt601)
    - [2.2. Bộ lọc Gaussian 2D & Tích chập không gian phân tách (Separable 1D Convolution)](#22-bộ-lọc-gaussian-2d--tích-chập-không-gian-phân-tách-separable-1d-convolution)
-   - [2.3. Thuật toán Phát hiện biên Canny đầy đủ 4 bước (Sobel L2 -> NMS -> Double Threshold -> Hysteresis BFS)](#23-thuật-toán-phát-hiện-biên-canny-đầy-đủ-4-bước)
-   - [2.4. Biến đổi Hough đường thẳng cực (Standard Hough Transform in Hesse Polar Space)](#24-biến-đổi-hough-đường-thẳng-cực)
-   - [2.5. Thuật toán Định vị 4 đỉnh góc phiếu thi [TL, TR, BR, BL]](#25-thuật-toán-định-vị-4-đỉnh-góc-phiếu-thi-tl-tr-br-bl)
-3. [Kiến trúc Module và Thiết kế Pipeline (`process_preprocessing_pipeline`)](#3-kiến-trúc-module-và-thiết-kế-pipeline)
+   - [2.3. Thuật toán Phát hiện biên Canny đầy đủ 4 bước](#23-thuật-toán-phát-hiện-biên-canny-đầy-đủ-4-bước)
+   - [2.4. Biến đổi Hough đường thẳng cực và Định vị 4 góc phiếu](#24-biến-đổi-hough-đường-thẳng-cực-và-định-vị-4-góc-phiếu)
+   - [2.5. Phân loại kịch bản: phiếu phủ kín khung hay nằm trên nền bàn tối](#25-phân-loại-kịch-bản-phiếu-phủ-kín-khung-hay-nằm-trên-nền-bàn-tối)
+3. [Kiến trúc Module và Thiết kế Pipeline](#3-kiến-trúc-module-và-thiết-kế-pipeline)
 4. [Kết quả Thực nghiệm Định lượng (Benchmark: Scratch vs. OpenCV)](#4-kết-quả-thực-nghiệm-định-lượng-benchmark-scratch-vs-opencv)
 5. [Khảo sát Tham số (Ablation Study)](#5-khảo-sát-tham-số-ablation-study)
-   - [5.1. Khảo sát thông số Gaussian: Kích thước kernel $k$ và độ lệch chuẩn $\sigma$](#51-khảo-sát-thông-số-gaussian)
-   - [5.2. Khảo sát cặp ngưỡng Canny $T_{\text{low}}$ và $T_{\text{high}}$](#52-khảo-sát-cặp-ngưỡng-canny)
 6. [Hướng dẫn Ghép nối Hệ thống (Integration Interfaces với TV2 và TV4)](#6-hướng-dẫn-ghép-nối-hệ-thống-integration-interfaces-với-tv2-và-tv4)
 7. [Phân tích Trường hợp Thất bại (Failure Cases) và Hướng khắc phục](#7-phân-tích-trường-hợp-thất-bại-failure-cases-và-hướng-khắc-phục)
-8. [Kết luận và Minh chứng Nghiệm thu](#8-kết-luận-và-minh-chứng-nghiệm-thu)
+8. [Đối chiếu với Code Review và Kết luận Nghiệm thu](#8-đối-chiếu-với-code-review-và-kết-luận-nghiệm-thu)
 
 ---
 
 ## 1. TỔNG QUAN NHIỆM VỤ CỦA THÀNH VIÊN 1
 
-Trong kiến trúc tổng thể 4 giai đoạn của Đề tài Nghiên cứu Hệ thống Chấm bài Trắc nghiệm OMR từ Ảnh chụp, **Thành viên 1** đảm nhiệm **Giai đoạn 1 (Stage 1: Preprocessing & Sheet Detection)**. Đây là mắt xích khởi đầu tối quan trọng trong toàn bộ pipeline: chất lượng của ảnh sau tiền xử lý và độ chính xác của tọa độ 4 góc phiếu quyết định trực tiếp đến sự thành công của phép nắn phối cảnh (Thành viên 2), độ chuẩn xác của việc phân ngưỡng nhị phân (Thành viên 3), và kết quả chấm điểm cuối cùng (Thành viên 4).
+Trong kiến trúc tổng thể 4 giai đoạn của Đề tài, **Thành viên 1** đảm nhiệm **Giai đoạn 1
+(Preprocessing & Sheet Detection)**: chuyển ảnh màu về mức xám, làm mịn nhiễu, phát hiện biên và
+**định vị chính xác 4 đỉnh góc của tờ phiếu**. Đây là mắt xích khởi đầu: nếu 4 góc sai thì phép
+nắn phối cảnh của TV2 sẽ cắt/nhòe vùng ô tô, kéo theo TV3 phân ngưỡng sai và TV4 chấm điểm sai.
 
 ```
-[Đầu vào: Ảnh chụp phiếu thi (.jpg/.png) từ điện thoại / webcam / file CSV]
+[Đầu vào: Ảnh chụp phiếu thi (.jpg/.png) từ điện thoại / webcam]
                                   │
                                   ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ MODULE THÀNH VIÊN 1: TIỀN XỬ LÝ & PHÁT HIỆN KHUNG PHIẾU THI (GIAI ĐOẠN 1)     │
-│ 1. Chuyển đổi ảnh màu RGB sang ảnh mức xám (Luminance ITU-R BT.601)          │
-│ 2. Làm mịn khử nhiễu bằng Bộ lọc Gaussian 2D (Tích chập phân tách 2 lượt)    │
-│ 3. Phát hiện biên Canny 4 bước (Sobel 3x3 L2 -> NMS -> Double Thresh -> Hyst)│
-│ 4. Biến đổi Hough đường thẳng cực (rho = x*cos(theta) + y*sin(theta))        │
-│ 5. Định vị 4 đỉnh góc khung phiếu [Top-Left, Top-Right, Bottom-Right, BL]    │
-│ 6. Đối chứng thực nghiệm song song với thư viện OpenCV chuẩn                 │
-└──────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ MODULE THÀNH VIÊN 1: TIỀN XỬ LÝ & PHÁT HIỆN KHUNG PHIẾU THI (GIAI ĐOẠN 1)   │
+│ 1. Chuyển đổi RGB → mức xám Luminance ITU-R BT.601                          │
+│ 2. Làm mịn khử nhiễu: Bộ lọc Gaussian 2D (tích chập phân tách 2 lượt)        │
+│ 3. Phát hiện biên Canny 4 bước (Sobel L2 → NMS → Ngưỡng kép → Hysteresis)   │
+│ 4. Biến đổi Hough cực (ρ = x·cosθ + y·sinθ) + NMS không gian tham số        │
+│ 5. Chấm điểm đường theo support biên thật, chọn cặp cạnh đối diện           │
+│ 6. Giải hệ Cramer → 4 giao điểm → tứ giác [TL, TR, BR, BL]                  │
+│ 7. Đối chứng định lượng song song với OpenCV (chỉ trong benchmark)          │
+└─────────────────────────────────────────────────────────────────────────────┘
                                   │
                                   ▼
-[Đầu ra cho TV2: Tọa độ 4 đỉnh khung phiếu (4x2) float32 + Ảnh xám tiền xử lý]
+[Đầu ra cho TV2: corners shape (4,2) float32 + ảnh xám đã tiền xử lý]
 ```
 
-### Ràng buộc kỹ thuật nghiêm ngặt (Theo Slide 9–12 Đề cương môn học):
-* **100% Cài đặt từ đầu (Code from Scratch)** bằng thư viện ma trận `NumPy`. Tuyệt đối không gọi các hàm xử lý ảnh có sẵn của OpenCV (`cv2.cvtColor`, `cv2.GaussianBlur`, `cv2.Sobel`, `cv2.Canny`, `cv2.HoughLines`, `cv2.findContours`) trong luồng chính.
-* Thư viện `OpenCV` chỉ được gọi độc lập trong khối kiểm thử đối chứng định lượng nhằm đo đạc sai số toán học (MSE, PSNR, IoU, Dice, Sai số góc) và thời gian thực thi (Latency).
+### Ràng buộc kỹ thuật (Theo Đề cương môn học):
+* **100% cài đặt từ đầu** bằng `NumPy`. Không gọi `cv2.cvtColor`, `cv2.GaussianBlur`, `cv2.Sobel`,
+  `cv2.Canny`, `cv2.HoughLines`, `cv2.findContours` trong luồng xử lý chính.
+* `OpenCV` chỉ được gọi trong khối benchmark để đo sai số và thời gian đối chứng.
+
+> **Ghi chú minh bạch:** bản báo cáo trước ghi *"tuyệt đối không thay đổi bất kỳ nội dung nào của
+> các file đã có sẵn trong dự án"*. Điều đó **không còn đúng** sau đợt sửa theo Code Review, vì lỗi
+> nằm chính trong mã nguồn TV1 nên buộc phải sửa. Toàn bộ thay đổi được liệt kê ở mục 8.
 
 ---
 
-## 2. CƠ SỞ LÝ THUYẾT VÀ CÀI ĐẶT THUẬT TOÁN THUẦN NUMPY (CODE FROM SCRATCH)
+## 2. CƠ SỞ LÝ THUYẾT VÀ CÀI ĐẶT THUẬT TOÁN THUẦN NUMPY
 
 ### 2.1. Chuyển đổi mức xám cảm nhận thị giác (Luminance ITU-R BT.601)
 
-#### Cơ sở toán học:
-Ảnh màu thông thường lưu trữ 3 kênh đỏ ($R$), xanh lục ($G$), xanh lam ($B$). Tuy nhiên, võng mạc mắt người có sự phân bố tế bào hình nón không đồng đều: nhạy cảm nhất với bước sóng xanh lục ($\approx 555\text{ nm}$), sau đó đến đỏ và kém nhạy nhất với xanh lam. Do đó, chuẩn quốc tế ITU-R BT.601 định nghĩa mức xám $I_{\text{gray}}$ theo tổ hợp tuyến tính có trọng số:
-$$I_{\text{gray}}(x, y) = 0.299 \cdot R(x, y) + 0.587 \cdot G(x, y) + 0.114 \cdot B(x, y)$$
-với $\sum w_c = 0.299 + 0.587 + 0.114 = 1.0$.
+**Cơ sở toán học:** mắt người nhạy nhất với ánh sáng lục ($\approx 555$ nm), sau đó đến đỏ và kém
+nhất với lam. Chuẩn ITU-R BT.601 định nghĩa:
 
-#### Kỹ thuật cài đặt Scratch tối ưu:
-```python
-def rgb_to_gray_scratch(image: np.ndarray, is_bgr: bool = False) -> np.ndarray:
-    img = np.asarray(image, dtype=np.float64)
-    if is_bgr:
-        b, g, r = img[:, :, 0], img[:, :, 1], img[:, :, 2]
-    else:
-        r, g, b = img[:, :, 0], img[:, :, 1], img[:, :, 2]
-    gray_f = 0.299 * r + 0.587 * g + 0.114 * b
-    return np.clip(np.round(gray_f), 0, 255).astype(np.uint8)
-```
-- Sử dụng `np.float64` trung gian triệt tiêu hoàn toàn sai số làm tròn số thực.
-- Vector hóa 100% trên mảng NumPy, không dùng vòng lặp pixel.
-- **Kết quả đối chứng:** Đạt $\text{MSE} = 0.0000$, $\text{PSNR} = 999.00\text{ dB}$, sai khác cực đại $0$ mức xám so với `cv2.cvtColor(BGR2GRAY)`.
+$$I_{\text{gray}}(x, y) = 0.299 \cdot R(x, y) + 0.587 \cdot G(x, y) + 0.114 \cdot B(x, y)$$
+
+với $\sum w_c = 0.299 + 0.587 + 0.114 = 1.0$ (bảo toàn dải động $[0, 255]$).
+
+**Cài đặt:** dùng `np.float64` trung gian, vector hóa toàn ảnh, `np.round` rồi ép `np.uint8`.
+
+**Đối chứng:** $\text{MSE} = 0.0000$, sai khác cực đại $0$ mức xám trên toàn bộ $800{,}000$ pixel
+so với `cv2.cvtColor(BGR2GRAY)` — khớp tuyệt đối, không phải "xấp xỉ".
 
 ---
 
-### 2.2. Bộ lọc Gaussian 2D & Tích chập không gian phân tách (Separable 1D Convolution)
+### 2.2. Bộ lọc Gaussian 2D & Tích chập phân tách (Separable 1D Convolution)
 
-#### Cơ sở toán học:
-Hàm phân phối Gaussian 2 chiều đẳng hướng với độ lệch chuẩn $\sigma$ và bán kính $r = \lfloor k/2 \rfloor$:
-$$G(u, v) = \frac{1}{2\pi\sigma^2} \exp\left(-\frac{u^2 + v^2}{2\sigma^2}\right), \quad u, v \in [-r, r]$$
-Chuẩn hóa ma trận nhân để bảo toàn tổng năng lượng sáng của ảnh:
-$$K_{\text{gauss}}(u, v) = \frac{G(u, v)}{\sum_{u=-r}^r \sum_{v=-r}^r G(u, v)}$$
+**Cơ sở toán học:** nhân Gaussian 2D đẳng hướng, bán kính $r = \lfloor k/2 \rfloor$:
 
-#### Kỹ thuật tối ưu hóa Tích chập phân tách (Separable 1D Filtering):
-Do hàm mũ có tính chất $\exp(a + b) = \exp(a) \cdot \exp(b)$, ma trận nhân Gaussian 2D có thể phân rã thành tích ngoài của hai nhân 1D:
-$$G(u, v) = g(u) \cdot g(v), \quad \text{với } g(u) = \frac{1}{\sqrt{2\pi}\sigma} \exp\left(-\frac{u^2}{2\sigma^2}\right)$$
-Tích chập 2D thông thường đòi hỏi $k^2$ phép nhân cộng cho mỗi điểm ảnh (với ảnh $1000 \times 800$, kernel $5 \times 5$, tương đương $2 \times 10^7$ phép tính). Bằng cách lọc theo hàng rồi lọc theo cột, số phép tính giảm xuống chỉ còn $2k = 10$ phép tính/pixel (giảm $2.5$ lần khối lượng tính toán).
+$$G(u, v) = \frac{1}{2\pi\sigma^2}\exp\left(-\frac{u^2+v^2}{2\sigma^2}\right), \qquad
+K_{\text{gauss}} = \frac{G}{\sum G}$$
 
-```
-Ảnh gốc (padded) ────> [Tích chập ngang bằng g(u) 1D] ────> [Tích chập dọc bằng g(v) 1D] ────> Ảnh làm mịn
-```
+Do $\exp(a+b) = \exp(a)\exp(b)$, nhân 2D phân rã thành tích ngoài của hai nhân 1D:
+$G(u,v) = g(u)\,g(v)$.
 
-#### Xử lý đệm biên đối xứng (Reflect 101 Padding):
-Để tránh hiệu ứng viền tối giả (Dark border artifact) khi dùng đệm số 0 (Zero-padding), nhóm cài đặt đệm biên phản xạ đối xứng chuẩn `BORDER_REFLECT_101` của OpenCV:
-$$\dots, d, c, b \mid a, b, c, d, \dots \mid c, b, a, \dots$$
-bằng lệnh `np.pad(image, pad_width=r, mode='reflect')`.
-- **Kết quả đối chứng:** Đạt $\text{MSE} = 0.0072$, $\text{PSNR} = 69.54\text{ dB}$ so với `cv2.GaussianBlur()`, vượt xa tiêu chuẩn $> 48.0\text{ dB}$.
+**Tối ưu:** lọc hàng rồi lọc cột ⇒ $2k$ phép nhân-cộng/pixel thay vì $k^2$. Với $k=5$: 10 thay vì
+25 (giảm 2.5 lần). Đệm biên `BORDER_REFLECT_101` (`fedcba|abcdefgh|hgfedc`) qua
+`np.pad(mode='reflect')` để triệt tiêu viền tối giả. Cửa sổ trượt dùng
+`np.lib.stride_tricks.sliding_window_view` (không copy bộ nhớ).
+
+**Đối chứng:** $\text{PSNR} = 69.54$ dB, sai khác cực đại $1$ mức xám. Chênh lệch 1 mức xám là do
+quy ước làm tròn `round half to even` (NumPy) vs `round half away from zero` (C++), **không phải
+sai số thuật toán**.
+
+> **Đính chính so với báo cáo trước:** báo cáo cũ dùng PSNR $69.54$ dB như "bằng chứng lọc nhiễu
+> tốt". Sai. Đại lượng đó chỉ đo **độ trung thực cài đặt** (Scratch có khớp OpenCV không), không
+> đo khả năng khử nhiễu. Khảo sát khử nhiễu thật nằm ở mục 5.1, đo PSNR so với **ảnh sạch gốc**.
 
 ---
 
 ### 2.3. Thuật toán Phát hiện biên Canny đầy đủ 4 bước
 
-Thuật toán Canny được thiết kế theo 3 tiêu chí tối ưu của John F. Canny (1986): Tỷ lệ lỗi thấp (Low error rate), Định vị chính xác (Localization), và Đáp ứng duy nhất (Single response). Nhóm cài đặt trọn vẹn 4 bước từ đầu bằng `NumPy`:
+Canny (1986) tối ưu 3 tiêu chí: tỉ lệ lỗi thấp, định vị chính xác, đáp ứng đơn trị.
 
-#### Bước 1 – Tính đạo hàm bậc nhất bằng toán tử Sobel $3 \times 3$ và Độ lớn Gradient L2
-Đạo hàm theo hướng ngang $G_x$ và dọc $G_y$:
-$$K_x = \begin{bmatrix} -1 & 0 & 1 \\ -2 & 0 & 2 \\ -1 & 0 & 1 \end{bmatrix}, \quad K_y = \begin{bmatrix} -1 & -2 & -1 \\ 0 & 0 & 0 \\ 1 & 2 & 1 \end{bmatrix}$$
-$$G_x = I_{\text{blur}} * K_x, \quad G_y = I_{\text{blur}} * K_y$$
-Áp dụng chuẩn khoảng cách Euclidean L2 (chính xác hơn gần đúng L1):
-$$M(x, y) = \sqrt{G_x(x, y)^2 + G_y(x, y)^2}, \quad \theta(x, y) = \text{atan2}(G_y(x, y), G_x(x, y))$$
-*(Sai số giữa $G_x, G_y$ tự code và `cv2.Sobel` đạt $0.0$).*
+**Bước 1 – Sobel $3\times3$ + gradient L2:**
 
-#### Bước 2 – Triệt tiêu không cực đại (Non-Maximum Suppression – NMS)
-Tại mỗi pixel $(r, c)$, gradient pháp tuyến chỉ hướng biến thiên mạnh nhất của độ sáng. NMS sẽ so sánh $M(r, c)$ với 2 điểm lân cận dọc theo hướng gradient. Góc $\theta$ được chia thành 4 khu vực lượng tử hóa:
-1. **Sector 0 (Hướng ngang, góc $[-22.5^\circ, 22.5^\circ] \cup [157.5^\circ, 180^\circ]$):**  
-   Điều kiện: $|G_y| \le \tan(22.5^\circ) \cdot |G_x| \approx 0.4142 \cdot |G_x|$.  
-   So sánh $M(r, c)$ với lân cận Trái $(r, c-1)$ và Phải $(r, c+1)$.
-2. **Sector 2 (Hướng dọc, góc $[67.5^\circ, 112.5^\circ]$):**  
-   Điều kiện: $|G_y| \ge \tan(67.5^\circ) \cdot |G_x| \approx 2.4142 \cdot |G_x|$.  
-   So sánh $M(r, c)$ với lân cận Trên $(r-1, c)$ và Dưới $(r+1, c)$.
-3. **Sector 1 & 3 (Hướng đường chéo):**  
-   - Nếu $G_x \cdot G_y > 0$: So sánh với Trên-Trái $(r-1, c-1)$ và Dưới-Phải $(r+1, c+1)$.
-   - Nếu $G_x \cdot G_y < 0$: So sánh với Trên-Phải $(r-1, c+1)$ và Dưới-Trái $(r+1, c-1)$.
+$$K_x = \begin{bmatrix} -1 & 0 & 1 \\ -2 & 0 & 2 \\ -1 & 0 & 1 \end{bmatrix}, \qquad
+K_y = \begin{bmatrix} -1 & -2 & -1 \\ 0 & 0 & 0 \\ 1 & 2 & 1 \end{bmatrix}$$
 
-> **Chi tiết kỹ thuật quan trọng:** Áp dụng bất đẳng thức **nghiêm ngặt một bên** ($M(r, c) > \text{neighbor}_1$ và $M(r, c) \ge \text{neighbor}_2$) để ngăn chặn triệt để hiện tượng biên dày 2 pixel trên các đỉnh bằng phẳng (Plateau edges).
+$$M = \sqrt{G_x^2 + G_y^2}, \qquad \theta = \operatorname{atan2}(G_y, G_x)$$
 
-#### Bước 3 & 4 – Phân ngưỡng kép (Double Thresholding) & Nối biên trễ (Hysteresis BFS)
-- **Phân loại 3 mức trạng thái:**
-  $$E(r, c) = \begin{cases} 255 & \text{nếu } M_{\text{NMS}}(r, c) \ge T_{\text{high}} \quad (\text{Biên mạnh - chắc chắn là biên}) \\ \text{WEAK} & \text{nếu } T_{\text{low}} \le M_{\text{NMS}}(r, c) < T_{\text{high}} \quad (\text{Biên yếu - tiềm năng}) \\ 0 & \text{nếu } M_{\text{NMS}}(r, c) < T_{\text{low}} \quad (\text{Nhiễu - loại bỏ}) \end{cases}$$
-- **Lan truyền BFS 8-lân cận:** Khởi tạo hàng đợi `collections.deque` từ toàn bộ tọa độ điểm biên mạnh. Duyệt các điểm lân cận 8 hướng: mọi điểm biên yếu có kết nối trực tiếp hoặc gián tiếp với điểm mạnh được nâng lên $255$; mọi điểm biên yếu cô lập (do nhiễu hạt sinh ra) bị xóa về $0$.
-- **Kết quả đối chứng:** Đạt độ trùng khớp $\text{IoU} = 99.02\%$ và $\text{Dice} = 0.9951$ so với `cv2.Canny(L2gradient=True)`.
+Dùng L2 (chuẩn Euclid) thay vì xấp xỉ L1 để định vị biên chính xác hơn. $G_x, G_y$ khớp
+$0.0$ sai số so với `cv2.Sobel(..., CV_16S)`.
 
----
+*Tối ưu:* 9 lát cắt của cửa sổ $3\times3$ cộng trực tiếp, thay cho
+`sliding_window_view` + `einsum`. Kết quả **trùng khít** nhưng nhanh hơn ~2.4 lần
+(91.7 ms → 37.4 ms trên ảnh $1000\times800$).
 
-### 2.4. Biến đổi Hough đường thẳng cực (Standard Hough Transform)
+**Bước 2 – Triệt tiêu không cực đại (NMS):** lượng tử hóa $\theta$ thành 4 hướng. Thay vì tính
+góc rồi so sánh, dùng tỉ lệ để tránh `arctan` tốn kém:
 
-#### Cơ sở toán học:
-Mỗi điểm ảnh biên $(x_i, y_i)$ trong không gian ảnh có vô số đường thẳng đi qua. Trong hệ tọa độ cực Hesse:
-$$\rho = x_i \cos\theta + y_i \sin\theta, \quad \theta \in [0, \pi), \quad \rho \in [-D, D]$$
-với $D = \sqrt{W^2 + H^2}$ là đường chéo tối đa của ảnh. Một điểm ảnh $(x_i, y_i)$ biến đổi thành một đường cong hình sin trong không gian tham số $(\rho, \theta)$. Các điểm thẳng hàng trên ảnh sẽ có các đường cong hình sin cùng giao nhau tại một điểm $(\rho^*, \theta^*)$.
+- Sector ngang: $|G_y| \le \tan(22.5^\circ)|G_x| \approx 0.4142|G_x|$ → so với $(r, c\pm1)$
+- Sector dọc: $|G_y| \ge \tan(67.5^\circ)|G_x| \approx 2.4142|G_x|$ → so với $(r\pm1, c)$
+- Sector chéo: dấu của $G_x \cdot G_y$ quyết định so với $(r\pm1, c\pm1)$
 
-```
-Mặt phẳng ảnh (x, y)                     Không gian tham số cực (rho, theta)
-  y ^                                      rho ^
-    |   * (x1, y1)                             |       /\
-    |     * (x2, y2)        Hough Transform    |      /  \  <- Giao điểm cực đại
-    |       * (x3, y3)     ─────────────────>  |     /    \    (rho*, theta*)
-    └──────────> x                             0 ────┴────┴────> theta (0 -> pi)
-```
+Dùng bất đẳng thức **nghiêm ngặt một phía** ($m > n_1$ và $m \ge n_2$) để tránh biên dày 2 pixel
+trên các đỉnh bằng phẳng (plateau).
 
-#### Tối ưu hóa Vector hóa bỏ phiếu (Vectorized Voting):
-Thay vì lặp qua từng điểm biên và từng góc $\theta$ bằng Python chậm chạp ($N \times 180$ vòng lặp), module tính toán toàn bộ ma trận khoảng cách:
-$$R = X \cos(\Theta)^T + Y \sin(\Theta)^T \in \mathbb{R}^{N \times 180}$$
-bằng `np.outer(x, cos_t) + np.outer(y, sin_t)`. Sau đó ánh xạ sang chỉ số 1D và tính tần suất xuất hiện thông qua `np.bincount`, hoàn tất bỏ phiếu cho ảnh $1000 \times 800$ chỉ trong $\approx 150\text{ ms}$.
+**Bước 3 – Ngưỡng kép:** $M_{\text{NMS}} \ge T_{\text{high}}$ → biên mạnh;
+$T_{\text{low}} \le M_{\text{NMS}} < T_{\text{high}}$ → biên yếu; còn lại loại.
 
-#### Khử cực đại phụ trong không gian tham số:
-Áp dụng NMS với ngưỡng góc $\Delta\theta \ge 5^\circ$ và $\Delta\rho \ge 10\text{ px}$ để đảm bảo mỗi cạnh khung phiếu chỉ chọn ra 1 đường thẳng đại diện duy nhất có số phiếu cao nhất.
+**Bước 4 – Nối biên trễ (Hysteresis):** đây là **tái tạo hình thái học** trên mặt nạ biên yếu:
+lặp phép hợp 8 bản dịch của mặt nạ hiện tại rồi giao với mặt nạ yếu, dừng khi hội tụ. Tương đương
+chính xác duyệt BFS 8-lân cận (đã kiểm chứng bằng test `assert np.array_equal`), nhưng vector hóa
+hoàn toàn: **95 ms → 9 ms**.
+
+**Đối chứng:** $\text{IoU} = 99.02\%$, $\text{Dice} = 0.9951$ so với `cv2.Canny(L2gradient=True)`.
 
 ---
 
-### 2.5. Thuật toán Định vị 4 đỉnh góc phiếu thi [TL, TR, BR, BL]
+### 2.4. Biến đổi Hough đường thẳng cực và Định vị 4 góc phiếu
 
-#### Giao điểm giải tích hai đường thẳng cực (Cramer's Rule):
-Cho 2 đường thẳng $L_1(\rho_1, \theta_1)$ và $L_2(\rho_2, \theta_2)$:
-$$\begin{cases} x \cos\theta_1 + y \sin\theta_1 = \rho_1 \\ x \cos\theta_2 + y \sin\theta_2 = \rho_2 \end{cases} \implies \begin{bmatrix} \cos\theta_1 & \sin\theta_1 \\ \cos\theta_2 & \sin\theta_2 \end{bmatrix} \begin{bmatrix} x \\ y \end{bmatrix} = \begin{bmatrix} \rho_1 \\ \rho_2 \end{bmatrix}$$
-Định thức ma trận: $D = \cos\theta_1 \sin\theta_2 - \sin\theta_1 \cos\theta_2 = \sin(\theta_2 - \theta_1)$.
-Nếu $|D| > 10^{-4}$ (hai đường không song song), tọa độ giao điểm là:
-$$x = \frac{\rho_1 \sin\theta_2 - \rho_2 \sin\theta_1}{\sin(\theta_2 - \theta_1)}, \quad y = \frac{\rho_2 \cos\theta_1 - \rho_1 \cos\theta_2}{\sin(\theta_2 - \theta_1)}$$
+**Phương trình Hesse:** mỗi điểm biên $(x_i, y_i)$ thỏa vô số đường; trong tọa độ cực:
 
-#### Xử lý kịch bản thực tế linh hoạt:
-1. **Kịch bản ảnh chuẩn (DS-01, DS-03, DS-04, DS-05):**  
-   Mép phiếu thi đã cắt sát mép khung ảnh (hoặc ảnh quét phẳng). Hệ thống tự động xác định 4 đỉnh trùng với 4 góc khung hình: $[[0, 0], [W-1, 0], [W-1, H-1], [0, H-1]]$.
-2. **Kịch bản phiếu chụp nghiêng trên bàn tối (DS-02 Perspective Tilt):**  
-   - Phân đoạn nền bàn tối bằng phân ngưỡng $I \ge 100$.
-   - Tìm biên bao bằng thuật toán **Bao lồi Chuỗi đơn điệu Andrew (Andrew's Monotone Chain 2D Convex Hull)** với độ phức tạp $O(N \log N)$ từ đầu bằng `NumPy`.
-   - Rút gọn đa giác bằng thuật toán **Ramer-Douglas-Peucker (RDP)** với sai số $\epsilon = 0.025 \times \text{Perimeter}$ để tìm 4 đỉnh của tứ giác bao ngoài.
-   - Sắp xếp chuẩn hóa thứ tự 4 đỉnh theo quy tắc hình học:
-     - Top-Left (TL): $\min(x + y)$
-     - Bottom-Right (BR): $\max(x + y)$
-     - Top-Right (TR): $\min(y - x)$
-     - Bottom-Left (BL): $\max(y - x)$
-   - **Kết quả:** Sai số khoảng cách Euclid trung bình giữa Scratch và OpenCV chỉ đạt $3.76\text{ px}$.
+$$\rho = x_i\cos\theta + y_i\sin\theta, \qquad \theta \in [0, \pi), \quad \rho \in [-D, D]$$
+
+với $D = \sqrt{W^2+H^2}$. Các điểm thẳng hàng cho các đường cong sin cùng đi qua một điểm
+$(\rho^*, \theta^*)$.
+
+```
+Mặt phẳng ảnh (x, y)                    Không gian tham số cực (rho, theta)
+  y ^                                     rho ^
+    |   * (x1, y1)                            |       /\
+    |     * (x2, y2)      Hough Transform     |      /  \  <- Giao điểm cực đại
+    |       * (x3, y3)   ─────────────────>   |     /    \    (rho*, theta*)
+    └──────────> x                            0 ────┴────┴────> theta (0 → pi)
+```
+
+> **Đính chính:** báo cáo cũ ghi miền $\theta \in [-\pi/2, \pi/2)$. Code dùng $[0, \pi)$ — là quy
+> ước Hesse chuẩn cho ảnh số (một đường không phân biệt hai chiều). Tài liệu đã sửa theo code.
+
+**Bỏ phiếu vector hóa:** $R = X\cos\Theta^T + Y\sin\Theta^T \in \mathbb{R}^{N\times180}$ qua
+`np.outer`, ánh xạ sang chỉ số 1D rồi `np.bincount`.
+
+**NMS trong không gian tham số** (`apply_parameter_space_nms`): gộp các đường có
+$\Delta\theta \le 5^\circ$ và $\Delta\rho \le 10$ px, giữ đường nhiều phiếu nhất. Hàm được tách
+riêng để **dùng lại cho cả kết quả `cv2.HoughLines`** khi đối chứng (mục 4).
+
+**Chấm điểm theo support thật** (`score_lines_by_edge_support`): mảng tích lũy chỉ đếm phiếu trong
+ô rời rạc, nên hai đường lệch 1–2 px có điểm gần như nhau. Hàm đếm trực tiếp số pixel biên cách
+đường $\le 1.5$ px (chia lô $\le 20{,}000$ điểm để giới hạn bộ nhớ). Nhờ vậy chọn đúng cạnh khung
+phiếu thay vì cạnh của ô tô bên trong.
+
+**Dựng tứ giác** (`detect_quad_from_hough_lines`):
+1. Tách họ **cạnh dọc** ($|\cos\theta| \ge \cos 20^\circ$) và **cạnh ngang**
+   ($|\sin\theta| \ge \cos 20^\circ$) — khung phiếu chụp tay nghiêng tối đa ~20°.
+2. Trong mỗi họ, chọn cặp đường có **tổng support lớn nhất** mà khoảng cách $\ge 50\%$ kích thước
+   ảnh (tức hai cạnh **đối diện**, không phải hai cạnh kề).
+3. Tính 4 giao điểm bằng `intersect_lines_polar` (Cramer):
+
+$$x = \frac{\rho_1\sin\theta_2 - \rho_2\sin\theta_1}{\sin(\theta_2-\theta_1)}, \qquad
+y = \frac{\rho_2\cos\theta_1 - \rho_1\cos\theta_2}{\sin(\theta_2-\theta_1)}$$
+
+với $|D| = |\sin(\theta_2-\theta_1)| > 10^{-4}$ (hai đường không song song).
+
+4. Kiểm tra hợp lệ: tứ giác nằm trong ảnh, diện tích $\ge 30\%$ khung hình.
+
+**Dự phòng** (`detect_quad_from_boundary_scratch`): Otsu → **điểm biên cực trị theo hàng/cột**
+(`collect_boundary_extremes`, tối đa $2H+2W$ điểm, **luôn chứa 4 đỉnh**) → bao lồi Andrew's
+Monotone Chain $O(N\log N)$ → **RDP trên đa giác khép kín** (`simplify_closed_polygon`, tách đôi tại
+đỉnh xa nhất) → 4 đỉnh → chuẩn hóa thứ tự TL/TR/BR/BL.
+
+> **Đính chính quan trọng (Code Review 2.2):** báo cáo cũ ghi "RDP với $\epsilon = 0.025 \times$
+> chu vi" như một bước đang chạy tốt. Thực tế code cũ truyền **đa giác khép kín** vào RDP, mà RDP
+> trên đường khép kín luôn thu về 2 điểm (điểm đầu = điểm cuối) nên bước này vô hiệu. Nay
+> `ramer_douglas_peucker` **ném `ValueError`** nếu nhận đa giác khép kín, và đường dự phòng dùng
+> `simplify_closed_polygon` tách đôi trước khi RDP. Ngoài ra việc lấy mẫu raster 3000 điểm dọc
+> biên có thể **bỏ sót đỉnh góc**; đã thay bằng cực trị theo hàng/cột (luôn giữ đỉnh).
+
+---
+
+### 2.5. Phân loại kịch bản: phiếu phủ kín khung hay nằm trên nền bàn tối
+
+Hai nhánh xử lý khác nhau hoàn toàn, nên chọn sai nhánh là sai toàn bộ kết quả. Bộ phân loại dùng
+**thống kê toàn dải viền** (không dùng 4 pixel góc như code cũ) và ngưỡng **Otsu tự cài đặt**
+(không dùng hằng số 100).
+
+| Tiêu chí | Nội dung | Ngưỡng |
+| :---: | :--- | :--- |
+| 1 | **Cả bốn** dải viền đều tối hơn ngưỡng Otsu | $\ge 20$ mức xám |
+| 2 | **Mỗi** dải viền có tỉ lệ pixel thuộc lớp tối của Otsu | $\ge 60\%$ |
+| 3 | Cạnh **sáng nhất** vẫn tối hơn trung vị vùng giữa ảnh | $< 60\%$ |
+
+Chỉ cần một tiêu chí đúng → kết luận "có nền bàn tối bao quanh".
+
+**Phát hiện mới trong quá trình nghiệm thu (chưa có trong Code Review):** phiên bản đầu của bộ
+phân loại gộp cả bốn dải viền thành **một** trung vị. Điều này đúng với DS-02 nhưng **sai với
+DS-05** (bóng đổ không đều): dải trên sáng 245, ba dải còn lại tối 80, nên trung vị gộp rơi vào
+vùng tối và ảnh bị đẩy sang nhánh Hough. Kết quả: tứ giác thụt vào trong, **sai 67.19 px** so với
+baseline. Bản sửa yêu cầu **mọi phía** cùng tối (tiêu chí 1 và 2 xét riêng từng dải), đưa sai số
+DS-05 về **0.00 px** mà không ảnh hưởng DS-02. Hai test hồi quy mới khóa lại hành vi này.
+
+Bảng quyết định thực đo trên 5 ảnh mẫu:
+
+| Ảnh | Trung vị 4 dải (T/B/L/R) | Vùng giữa | Otsu | Kết luận | Nhánh |
+| :--- | :--- | :---: | :---: | :---: | :--- |
+| DS-01 Chuẩn | 245 / 245 / 245 / 245 | 245 | 141 | Không nền tối | Toàn khung |
+| DS-02 Nghiêng bàn tối | 45 / 45 / 45 / 45 | 245 | 144 | **Nền tối** | Canny + Hough |
+| DS-03 Thiếu sáng | 142 / 142 / 142 / 142 | 142 | 86 | Không nền tối | Toàn khung |
+| DS-04 Tô sai + tẩy | 245 / 245 / 245 / 245 | 245 | 141 | Không nền tối | Toàn khung |
+| DS-05 Bóng đổ | **245 / 80 / 245 / 80** | 80 | 157 | Không nền tối | Toàn khung |
 
 ---
 
 ## 3. KIẾN TRÚC MODULE VÀ THIẾT KẾ PIPELINE
 
-Cấu trúc package của Module Thành viên 1 được module hóa chuyên nghiệp theo đúng chuẩn phần mềm kỹ thuật:
-
 ```
 OMR_System_TV1/src/
-├── __init__.py                # Package initialization & re-export toàn bộ API
-├── tv1_grayscale_blur.py      # Chuyển mức xám Luminance & Lọc Gaussian 2D
-├── tv1_canny.py               # Phát hiện biên Canny 4 bước (Sobel, NMS, Hysteresis)
-├── tv1_hough.py               # Biến đổi Hough cực, Giao điểm Cramer & Andrew's Convex Hull
-└── tv1_preprocessing.py        # Pipeline tích hợp hoàn chỉnh & CLI Demo Runner
+├── __init__.py                # Re-export 32 API công khai
+├── tv1_grayscale_blur.py      # Luminance BT.601 + Gaussian 2D separable
+├── tv1_canny.py               # Sobel → NMS → Ngưỡng kép → Hysteresis vector hóa
+├── tv1_hough.py               # Hough cực, NMS tham số, support scoring, Cramer,
+│                              #   convex hull, RDP hở/khép kín, Otsu tự cài
+└── tv1_preprocessing.py       # detect_sheet_corners, pipeline tích hợp, benchmark
 ```
 
-Hàm tích hợp chính `process_preprocessing_pipeline(image, use_scratch=True)` nhận ảnh đầu vào từ điện thoại và trả về một từ điển hoàn chỉnh chứa:
-* `'gray'`: Ma trận ảnh mức xám đã chuẩn hóa.
-* `'blurred'`: Ma trận ảnh sau làm mịn Gaussian.
-* `'edges'`: Ma trận ảnh nhị phân biên Canny.
-* `'corners'`: Mảng float32 shape $(4, 2)$ chứa tọa độ 4 góc [TL, TR, BR, BL].
-* `'latencies'`: Chi tiết độ trễ thực thi từng công đoạn nhỏ (ms).
+`process_preprocessing_pipeline(image, use_scratch=True)` trả về dict:
+
+| Khóa | Nội dung |
+| :--- | :--- |
+| `'gray'` | Ảnh mức xám `uint8` |
+| `'blurred'` | Ảnh sau lọc Gaussian |
+| `'edges'` | Ảnh biên nhị phân Canny |
+| `'corners'` | `float32` shape $(4, 2)$, thứ tự `[TL, TR, BR, BL]` |
+| `'latencies'` | Độ trễ từng công đoạn (ms) |
+
+**Thay đổi thiết kế quan trọng:** `detect_sheet_corners` nhận thêm `precomputed_gray` và
+`precomputed_edges`. Trước đây pipeline tính ảnh xám, tính biên Canny, rồi gọi
+`detect_sheet_corners` khiến Canny **chạy lần thứ hai** (~70 ms lãng phí). Nay pipeline truyền lại
+kết quả đã có. Test `test_pipeline_does_not_run_canny_twice` khóa lại điều này.
 
 ---
 
 ## 4. KẾT QUẢ THỰC NGHIỆM ĐỊNH LƯỢNG (BENCHMARK: SCRATCH vs. OPENCV)
 
-Thực nghiệm được tiến hành trên máy tính Intel Core i7, Windows 11, chạy độc lập trên ảnh phiếu thi chuẩn $1000 \times 800$ (`01_B21DCCN001_Chuan.png`) và ảnh nghiêng ($1120 \times 920$, `02_B21DCCN002_Nghieng_BanToi.png`):
+Môi trường: Windows 11, Python 3.14.0, NumPy 2.5.4, OpenCV 5.0.0. Ảnh chuẩn $1000\times800$
+(`01_B21DCCN001_Chuan.png`). Mỗi phép đo lấy **giá trị tốt nhất trong 3 lần chạy**.
 
-### Bảng 1: Bảng số liệu Nghiệm thu Kỹ thuật Định lượng (TV1 Scratch vs. OpenCV)
+### Bảng 1: Nghiệm thu định lượng TV1
 
-| STT | Tên Thuật toán | Hàm Code from Scratch (`NumPy`) | Hàm `OpenCV` đối chứng | MSE | PSNR (dB) | IoU (%) | Sai số / Đặc trưng | Thời gian Scratch | Thời gian OpenCV | Đánh giá Nghiệm thu |
-| :---: | :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **1** | Chuyển mức xám | `rgb_to_gray_scratch()` | `cv2.cvtColor` | **$0.0000$** | **$999.00$** | — | $\Delta I_{\max} = 0\text{ px}$ | $17.14\text{ ms}$ | $2.71\text{ ms}$ | **✅ PASS (Xuất sắc)** |
-| **2** | Lọc Gaussian 2D | `gaussian_blur_scratch()` | `cv2.GaussianBlur` | **$0.0072$** | **$69.54$** | — | $\Delta I_{\max} = 1\text{ px}$ | $38.79\text{ ms}$ | $0.65\text{ ms}$ | **✅ PASS (Xuất sắc)** |
-| **3** | Biên Canny 4 bước | `canny_edge_scratch()` | `cv2.Canny` | $23.0839$ | $34.50$ | **$99.02\%$** | $\text{Dice} = 0.9951$ | $262.85\text{ ms}$ | $2.79\text{ ms}$ | **✅ PASS (Đạt chuẩn)** |
-| **4** | Hough Transform | `hough_lines_standard()` | `cv2.HoughLines` | $0.0000$ | $999.00$ | — | Bắt trọn 4 cạnh viền | $149.53\text{ ms}$ | $6.11\text{ ms}$ | **✅ PASS (Đạt chuẩn)** |
-| **5** | Định vị 4 đỉnh | `detect_sheet_corners()` | Contour Quad | $0.0000$ | $999.00$ | — | $E_{\text{corner}} = 0.00\text{ px}$ (DS-01)<br>$E_{\text{corner}} = 3.76\text{ px}$ (DS-02) | $21.47\text{ ms}$ | $0.27\text{ ms}$ | **✅ PASS (Đạt chuẩn)** |
+| STT | Thuật toán | Hàm Scratch | Hàm OpenCV | Chỉ số đối chứng | Thời gian Scratch | Thời gian OpenCV | Kết luận |
+| :---: | :--- | :--- | :--- | :---: | :---: | :---: | :---: |
+| **1** | Chuyển mức xám | `rgb_to_gray_scratch()` | `cv2.cvtColor` | MSE $=0.0000$, $\Delta I_{\max}=0$ | $18.2$ ms | $2.7$ ms | **PASS** |
+| **2** | Gaussian 2D | `gaussian_blur_scratch()` | `cv2.GaussianBlur` | PSNR $=69.54$ dB, $\Delta I_{\max}=1$ | $38.8$ ms | $0.8$ ms | **PASS** |
+| **3** | Canny 4 bước | `canny_edge_detector()` | `cv2.Canny` | IoU $=99.02\%$, Dice $=0.9951$ | $69.8$ ms | $3.1$ ms | **PASS** |
+| **4** | Hough cực | `hough_lines_standard()` | `cv2.HoughLines` + NMS | Recall $=100.0\%$, Precision $=91.2\%$ | $146.9$ ms | $6.3$ ms | **PASS** |
+| **5** | Định vị 4 góc | `detect_sheet_corners()` | Contour quad (OpenCV) | $E=0.00$ px (DS-01), $1.93$ px (DS-02), $0.00$ px (DS-05) | $23.6$ ms | $4.5$ ms | **PASS** |
 
-### Nhận xét phân tích kết quả:
-1. **Về độ chính xác số học:**
-   - Phép chuyển đổi mức xám đạt sai số tuyệt đối bằng $0$ trên toàn bộ $800,000$ điểm ảnh.
-   - Bộ lọc Gaussian 2D đạt $\text{PSNR} = 69.54\text{ dB}$, vượt xa chỉ tiêu tối thiểu $48.0\text{ dB}$. Điểm sai khác duy nhất là chênh lệch $1$ mức xám ở một số ít pixel do quy ước làm tròn số thực dấu phẩy động (`round half to even` của Python vs `round half away from zero` của C++).
-   - Phát hiện biên Canny đạt độ trùng khớp $\text{IoU} = 99.02\%$, vượt chỉ tiêu $\ge 98.0\%$.
-2. **Về thời gian thực thi (Latency):**
-   - Tổng thời gian chạy Giai đoạn 1 ở chế độ Scratch chỉ tốn $\approx 297\text{ ms}$/phiếu thi độ phân giải cao ($1000 \times 800$), đáp ứng hoàn toàn yêu cầu chấm thời gian thực ($< 1.0\text{ s}$/bài).
+### Nhận xét về phép đo Hough (đã sửa phương pháp)
+
+Báo cáo cũ ghi Hough đạt "MSE $=0.0000$, PSNR $=999.00$ dB" và mô tả "bắt trọn 4 cạnh viền". Đó
+**không phải một phép đo hợp lệ**: hai tập đường thẳng không cùng số phần tử và không cùng thứ tự
+nên không thể tính MSE/PSNR theo pixel. Cách cũ so `|len(Scratch) − len(OpenCV)| ≤ 5` cũng sai về
+bản chất, vì `cv2.HoughLines` **không** NMS (trả 79 đường) còn Scratch có NMS (34 đường).
+
+Phương pháp đúng đang dùng:
+1. Chuẩn hóa danh sách OpenCV bằng **cùng** quy trình `apply_parameter_space_nms` → 31 đường.
+2. So khớp theo tham số hình học $(\rho, \theta)$, chuẩn hóa $\theta$ về $[0, \pi)$ để
+   $(\rho,\theta)$ và $(-\rho, \theta+\pi)$ là một đường; dung sai $2^\circ$ / $5$ px.
+3. Báo cáo **Recall** (% đường OpenCV được tìm lại) và **Precision** (% đường Scratch có trong
+   OpenCV).
+
+Kết quả: **Recall $=100.0\%$** (không bỏ sót đường nào của OpenCV), **Precision $=91.2\%$** (phần
+lớn đường Scratch trùng OpenCV; phần dư là các đường phụ có support thật nhưng OpenCV gộp mất).
+Với mục tiêu *dựng khung phiếu*, recall mới là chỉ số quan trọng — và đạt tuyệt đối.
+
+### Nhận xét về độ trễ
+
+| Ảnh | Xám | Gaussian | Canny | Định vị góc | **Tổng** |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| DS-01 Chuẩn ($800\times1000$) | 17.7 | 39.6 | 66.7 | 4.0 | **128.0 ms** |
+| DS-02 Nghiêng ($920\times1120$) | 24.1 | 53.0 | 91.2 | 209.0 | **377.3 ms** |
+| DS-05 Bóng đổ ($800\times1000$) | 17.7 | 40.5 | 84.0 | 4.0 | **~146 ms** |
+
+Trung bình 5 ảnh mẫu ≈ **208 ms**, lớn nhất **377 ms** — đạt yêu cầu $<600$ ms/phiếu và thấp hơn
+nhiều so với $1.5$ s mà Code Review mục 2.7 nêu. So với bản trước khi tối ưu (1.1–1.7 s), giảm
+4–6 lần nhờ: Sobel dùng slicing (91.7 → 37.4 ms), hysteresis vector hóa (95 → 9 ms), và pipeline
+không chạy Canny hai lần.
+
+> **Trung thực về con số:** báo cáo cũ ghi "297 ms/phiếu" cho toàn giai đoạn 1 trong khi bảng của
+> chính báo cáo đó cộng lại đã hơn 480 ms. Con số 297 ms không tái lập được. Bảng trên là số đo
+> lại thực tế.
 
 ---
 
 ## 5. KHẢO SÁT THAM SỐ (ABLATION STUDY)
 
-### 5.1. Khảo sát thông số Gaussian: Kích thước kernel $k$ và độ lệch chuẩn $\sigma$
+Toàn bộ số liệu dưới đây được đo lại trong đợt nghiệm thu này. Các bảng cũ trong báo cáo trước
+chứa số liệu **không tái lập được** (ví dụ PSNR $74.21$ dB cho kernel $3\times3$ trong khi đo lại
+chỉ được $71.13$ dB trên cùng ảnh) nên đã được thay thế.
 
-Thực nghiệm đo đạc chỉ số PSNR so với OpenCV và độ trễ thực thi khi biến thiên $k \in \{3, 5, 7, 9\}$ và $\sigma \in \{0.8, 1.4, 2.0\}$ trên tập dữ liệu nhiễu hạt **DS-04**:
+### 5.1. Khảo sát Gaussian: khử nhiễu thật (không phải độ trung thực cài đặt)
 
-| Kích thước kernel $k$ | Độ lệch chuẩn $\sigma$ | PSNR (dB) | Thời gian Scratch (ms) | Hiệu quả lọc nhiễu hạt | Đánh giá & Khuyến nghị |
-| :---: | :---: | :---: | :---: | :--- | :--- |
-| $3 \times 3$ | $0.8$ | $74.21\text{ dB}$ | $22.1\text{ ms}$ | Lọc nhiễu yếu, còn hạt muối tiêu nhỏ | Không khuyến nghị cho ảnh chụp thiếu sáng |
-| **$5 \times 5$** | **$1.4$** | **$69.54\text{ dB}$** | **$38.8\text{ ms}$** | **Lọc sạch nhiễu hạt, giữ sắc nét viền ô tròn** | **LỰA CHỌN TỐI ƯU CỦA ĐỒ ÁN** |
-| $7 \times 7$ | $2.0$ | $64.12\text{ dB}$ | $58.4\text{ ms}$ | Làm mịn mạnh, viền ô tròn bị nhòe nhẹ | Phù hợp khi camera quá nhiễu hạt |
-| $9 \times 9$ | $2.5$ | $60.85\text{ dB}$ | $81.2\text{ ms}$ | Viền chữ bị mờ, mất chi tiết nét bút bi | Không nên dùng do làm giảm độ chính xác OMR |
+Thí nghiệm: lấy ảnh sạch DS-01 làm chuẩn, thêm nhiễu Gauss $\sigma = 18$ **và** nhiễu muối tiêu
+2%, rồi đo PSNR của ảnh đã lọc **so với ảnh sạch gốc**.
 
-> **Kết luận:** Cặp tham số $k = 5 \times 5, \sigma = 1.4$ là điểm cân bằng hoàn hảo giữa khả năng khử nhiễu và bảo toàn biên cạnh.
+Ảnh nhiễu ban đầu: PSNR $=19.15$ dB, phương sai Laplacian $=17{,}683$ (ảnh sạch: $2{,}571$).
+
+| Kernel | $\sigma$ | PSNR vs ảnh sạch | Mảnh nhiễu $\le 5$ px | Thời gian | Đánh giá |
+| :---: | :---: | ---: | ---: | ---: | :--- |
+| $3\times3$ | 0.8 | 23.83 dB | 387 | 28.4 ms | Còn nhiều mảnh nhiễu rời rạc |
+| $3\times3$ | 1.4 | 23.29 dB | 192 | 28.9 ms | Vẫn còn 192 mảnh rời |
+| $5\times5$ | 0.8 | 23.79 dB | 348 | 37.7 ms | Chưa đủ mạnh cho nhiễu muối tiêu |
+| **$5\times5$** | **1.4** | **22.28 dB** | **17** | **38.8 ms** | **Cân bằng tốt: nhiễu rời giảm 96%** |
+| $5\times5$ | 2.0 | 21.56 dB | 24 | 36.5 ms | Mịn hơn nhưng bắt đầu mất chi tiết |
+| $7\times7$ | 1.4 | 21.81 dB | 11 | 46.8 ms | Ít nhiễu nhất nhưng tốn thời gian hơn 20% |
+
+**Kết luận:** $5\times5$, $\sigma = 1.4$ là điểm cân bằng. $3\times3$ để lại quá nhiều mảnh nhiễu
+(rất hại cho Hough vì mỗi mảnh nhiễu đều bỏ phiếu); $7\times7$ chỉ giảm thêm 6 mảnh nhiễu nhưng
+chậm hơn 20% và làm mờ nét bút bi (quan trọng với TV3).
+
+> Lưu ý về cách đọc PSNR: PSNR $5\times5/\sigma{=}1.4$ *thấp hơn* $3\times3$ vì lọc mạnh làm mất
+> chi tiết tần số cao, trong khi nhiễu còn lại ở $3\times3$ lại "tình cờ" gần ảnh sạch về mặt
+> năng lượng. Vì vậy bảng này bổ sung cột **mảnh nhiễu rời rạc** — chỉ số phản ánh đúng tác động
+> lên bước Hough phía sau.
+
+### 5.2. Khảo sát cặp ngưỡng Canny $T_{\text{low}}, T_{\text{high}}$
+
+Đo trên DS-03 (thiếu sáng + nhiễu hạt) với cùng ảnh xám và cùng Gaussian:
+
+| Cặp ngưỡng | Mật độ biên | Số mảnh nhiễu $\le 5$ px | Số mảnh nhiễu $\le 20$ px | IoU vs OpenCV | Thời gian |
+| :---: | ---: | ---: | ---: | ---: | ---: |
+| $(30, 80)$ | 4.75% | 44 | — | 99.08% (DS-01) | 108 ms |
+| **$(50, 150)$** | **3.62%** | **2** | **—** | **99.02%** | **108 ms** |
+| $(80, 200)$ | 3.60% | 0 | — | 99.02% | 106 ms |
+| $(100, 250)$ | 1.92% | — | — | — | 197 ms |
+
+Trên ảnh sạch DS-01: $(30,80)$ sinh 47 mảnh nhiễu $\le 5$ px, $(50,150)$ chỉ còn 7, $(80,200)$ còn
+2. Chọn $(50, 150)$: giảm 96% mảnh nhiễu so với $(30,80)$ mà **không** làm mất biên thật (IoU với
+OpenCV vẫn $99.02\%$, số điểm biên chênh lệch chỉ 143 pixel trên 800{,}000).
+
+> Báo cáo cũ ghi $(30,80)$ cho IoU $96.8\%$ và $(80,200)$ cho $95.4\%$. Đo lại cho thấy cả hai đều
+> xấp xỉ $99\%$ — vì Scratch và OpenCV dùng chung ngưỡng nên IoU ít nhạy với ngưỡng. Chỉ số phân
+> biệt thực sự là **số mảnh nhiễu rời rạc**, đã thêm vào bảng.
 
 ---
 
-### 5.2. Khảo sát cặp ngưỡng Canny $T_{\text{low}}$ và $T_{\text{high}}$
+## 6. HƯỚNG DẪN GHÉP NỐI HỆ THỐNG (INTEGRATION VỚI TV2 VÀ TV4)
 
-Thực nghiệm khảo sát ảnh hưởng của cặp ngưỡng đến tỷ lệ nhận diện biên trên tập **DS-01**:
+### 6.1. Với TV2 (Nắn phối cảnh)
 
-| Cặp ngưỡng $(T_{\text{low}}, T_{\text{high}})$ | Tỷ lệ điểm biên (%) | IoU vs OpenCV (%) | Tỷ lệ bắt nhầm nhiễu (FP) | Tỷ lệ đứt gãy biên (FN) | Đánh giá |
-| :---: | :---: | :---: | :---: | :---: | :--- |
-| $(30, 80)$ | $6.82\%$ | $96.8\%$ | Cao (dính vân sần mặt bàn) | Rất thấp | Quá nhạy với nhiễu |
-| **$(50, 150)$** | **$3.54\%$** | **$99.02\%$** | **Gần như $0\%$** | **$< 0.2\%$** | **LỰA CHỌN CHUẨN CỦA ĐỒ ÁN** |
-| $(80, 200)$ | $2.11\%$ | $95.4\%$ | $0\%$ | Cao (đứt nét viền ô tròn mờ) | Bị mất biên ô tô chì nhạt |
-
----
-
-## 6. HƯỚNG DẪN GHÉP NỐI HỆ THỐNG (INTEGRATION INTERFACES VỚI TV2 VÀ TV4)
-
-Module Thành viên 1 xuất bản các giao diện lập trình (API) chuẩn hóa, đã được tích hợp thành công vào luồng tổng thể của nhóm:
-
-### 1. Giao tiếp với Module Thành viên 2 (TV2 - Nắn phối cảnh):
-Module TV1 cung cấp hàm `detect_sheet_corners(image, use_scratch=True)` trả về ma trận shape $(4, 2)$ float32 theo đúng thứ tự `[TL, TR, BR, BL]`. Thành viên 2 nhận trực tiếp mảng này và truyền vào hàm `warp_perspective_sheet(image, corners)` mà không cần bất kỳ bước chuyển đổi trung gian nào:
 ```python
-# TV1 phát hiện góc
-corners = detect_sheet_corners(raw_image, use_scratch=True)
+# TV1: phát hiện 4 góc, tái dùng gray/edges nếu đã có để tránh chạy lại Canny
+result = process_preprocessing_pipeline(raw_image, use_scratch=True)
+corners = result["corners"]          # float32 (4, 2) theo thứ tự [TL, TR, BR, BL]
 
-# TV2 nắn thẳng phối cảnh
-warped_sheet = warp_perspective_sheet(gray_image, corners, target_width=800, target_height=1000, use_scratch=True)
+# TV2: nắn thẳng phối cảnh
+warped = warp_perspective_sheet(result["gray"], corners, target_width=800, target_height=1000, use_scratch=True)
 ```
 
-### 2. Giao tiếp với Module Thành viên 4 (TV4 - Pipeline Coordinator & Demo App):
-Trong `OMR_System_TV4/src/pipeline_coordinator.py` và `OMR_System_TV4/src/tv4_enhancement_eval.py`:
-- `rgb_to_gray_scratch`: Tự động gọi trong Stage 1 của luồng chấm thi.
-- `gaussian_blur_scratch`: Tự động gọi trong bộ benchmark đối chứng 4 module.
-- `canny_edge_scratch`: Tự động gọi đối chứng trong Tab 3 của Giao diện Web Streamlit.
+Hợp đồng dữ liệu: `corners` là `float32`, thứ tự cố định TL → TR → BR → BL, đúng thứ tự
+`order_corners()` của TV2 mong đợi. Không cần chuyển đổi trung gian.
+
+### 6.2. Với TV4 (Pipeline Coordinator)
+
+- `rgb_to_gray_scratch` — gọi trong Stage 1 của `pipeline_coordinator.py`
+- `gaussian_blur_scratch`, `canny_edge_scratch` — gọi trong `benchmark_all_modules()`
+- `detect_sheet_corners` — gọi để lấy 4 góc trước khi warp
+
+### 6.3. Ranh giới trách nhiệm với TV2 (quan trọng, Code Review 1.2)
+
+TV1 **chỉ** trả về 4 góc hình học. Việc **chuẩn hóa hướng phiếu** (0°/90°/180°/270°) thuộc TV2
+(`detect_markers_and_correct_rotation` + NCC). Code Review đã chỉ ra kịch bản xoay 90°/180°
+**chưa được xử lý end-to-end**; nguyên nhân là TV2 chưa được gọi trong pipeline, cộng với thiết kế
+phiếu hiện tại có 4 marker **giống nhau** nên về nguyên tắc không thể suy ra hướng xoay. Đây là
+việc của TV2 và thiết kế phiếu — không phải lỗi của module TV1.
 
 ---
 
-## 7. PHÂN TÍCH TRƯỜNG HỢP THẤT BẠI (FAILURE CASES) VÀ HƯỚNG KHẮC PHỤC
+## 7. PHÂN TÍCH TRƯỜNG HỢP THẤT BẠI (FAILURE CASES)
 
-Để đảm bảo tính trung thực khoa học theo yêu cầu của Giảng viên hướng dẫn tại Mục 8 Đề cương, Thành viên 1 đã phân tích 02 trường hợp giới hạn kỹ thuật của Giai đoạn 1:
-
-| STT | Trường hợp thất bại (Failure Case) | Nguyên nhân gốc rễ trong Pipeline | Giải pháp khắc phục đã cài đặt |
+| STT | Trường hợp | Nguyên nhân gốc rễ | Trạng thái xử lý |
 | :---: | :--- | :--- | :--- |
-| **1** | **Phiếu đặt trên mặt bàn màu trắng sáng trùng màu giấy ($\Delta I < 15$)** | Độ tương phản mức xám giữa mép giấy và mặt bàn quá yếu khiến gradient Sobel $< T_{\text{low}}$, Canny không bắt được đường biên ngoài cùng của giấy mà chỉ bắt vào khung viền đen in bên trong phiếu. | Bổ sung cơ chế kiểm tra tọa độ bounding box: nếu tứ giác phát hiện có kích thước chiếm đúng vị trí khung viền fiducial in sẵn ($x_{\min} \approx 5\% W, x_{\max} \approx 95\% W$), hệ thống tự động suy rộng ra biên giấy hoặc mặc định lấy toàn bộ khung hình ảnh. |
-| **2** | **Camera điện thoại bị rung nhòe chuyển động mạnh (Motion Blur)** | Chuyển động làm nhòe gradient biên theo một phương, khiến giá trị $M(x, y)$ sụt giảm nghiêm trọng dưới ngưỡng $T_{\text{low}}$, dẫn tới đường biên Canny bị đứt đoạn không liên tục. | Kết hợp bộ lọc Gaussian có kernel nhỏ hơn ($3 \times 3$) và áp dụng phân ngưỡng động thích nghi theo phân vị 90 của độ lớn Gradient thay vì dùng ngưỡng cố định 50/150. |
+| **1** | Phiếu trên mặt bàn trắng, tương phản $\Delta I < 15$ | Gradient Sobel dưới $T_{\text{low}}$, Canny bắt khung viền in bên trong thay vì mép giấy | **Chưa xử lý triệt để.** Hiện dựa vào bộ phân loại dải viền: nếu cả 4 phía đều sáng gần bằng thân phiếu thì trả về 4 góc khung hình (giả định phiếu phủ kín ảnh). Nếu phiếu **không** phủ kín và nền cũng sáng thì không có tín hiệu hình học nào để tách — cần dataset thật để đánh giá. |
+| **2** | Rung nhòe chuyển động (motion blur) | Gradient bị nhòe theo một phương, biên đứt đoạn | **Chưa cài đặt.** Đề xuất: kernel nhỏ hơn ($3\times3$) + ngưỡng thích nghi theo phân vị độ lớn gradient. Chưa thử nghiệm vì chưa có ảnh mẫu bị nhòe chuyển động thật. |
+| **3** | Bóng đổ mạnh một phía (DS-05) | Bộ phân loại gộp trung vị 4 dải viền nên bị bóng đổ đánh lừa | **Đã sửa trong đợt này.** Yêu cầu cả bốn phía cùng tối; sai số DS-05: $67.19 \to 0.00$ px. Có 2 test hồi quy. |
+| **4** | Phiếu xoay 90°/180° | 4 marker giống nhau nên NCC không phân biệt được hướng | **Ngoài phạm vi TV1** (TV2 + thiết kế phiếu). |
 
 ---
 
-## 8. KẾT LUẬN VÀ MINH CHỨNG NGHIỆM THU
+## 8. ĐỐI CHIẾU VỚI CODE REVIEW VÀ KẾT LUẬN NGHIỆM THU
 
-### 8.1. Tóm tắt kết quả hoàn thành:
-1. **Cài đặt 100% Code from Scratch bằng NumPy:** Hoàn thành xuất sắc toàn bộ 4 thuật toán lõi được giao (Chuyển mức xám Luminance BT.601, Bộ lọc Gaussian 2D phân tách, Thuật toán Canny 4 bước, và Biến đổi Hough cực Hesse).
-2. **Tuân thủ quy định học thuật:** Tuyệt đối không thay đổi bất kỳ nội dung nào của các file đã có sẵn trong dự án; toàn bộ mã nguồn của TV1 được tổ chức độc lập, đóng gói hoàn chỉnh trong thư mục `OMR_System_TV1/`.
-3. **Chất lượng kiểm thử:**
-   - **18/18 Unit Tests** tự động vượt qua kiểm thử thành công ($100\%$ PASSED).
-   - Script demo độc lập `test_tv1.py` hoàn thành 6 bài test định lượng đạt loại xuất sắc.
-   - Toàn bộ ảnh trực quan các bước trung gian (`1_input_sample.png` $\rightarrow$ `9_triplet_comparison.png`), file số liệu `benchmark_metrics.csv` và `benchmark_metrics.json` đã được tự động kết xuất đầy đủ tại thư mục `outputs/tv1/`.
-4. **Tích hợp trơn tru:** Mã nguồn TV1 đã được kết nối thông suốt với `OMR_System_TV4/run_demo.py` và Giao diện Streamlit `app.py`, giúp mục đối chứng liên module (2B) hiển thị đầy đủ cả 4 module TV1 $\rightarrow$ TV4.
+### 8.1. Các mục Code Review thuộc phạm vi TV1
 
-### 8.2. Danh sách minh chứng bàn giao sản phẩm:
-- Mã nguồn lõi: `OMR_System_TV1/src/tv1_grayscale_blur.py`, `tv1_canny.py`, `tv1_hough.py`, `tv1_preprocessing.py`.
-- Bộ kiểm thử tự động: `OMR_System_TV1/tests/test_tv1_grayscale_blur.py`, `test_tv1_canny.py`, `test_tv1_hough.py`, `test_tv1_benchmark.py`.
-- Script CLI nghiệm thu nhanh: `OMR_System_TV1/test_tv1.py`.
-- Hướng dẫn cài đặt & vận hành: `OMR_System_TV1/README.md`.
-- File báo cáo kỹ thuật: `OMR_System_TV1/reports/Bao_Cao_Thanh_Vien_1_OMR.md`.
-- Sản phẩm trực quan & số liệu benchmark: Thư mục `OMR_System_TV1/outputs/tv1/`.
+| Mục | Nội dung Code Review | Xử lý |
+| :--- | :--- | :--- |
+| **1.2** | `detect_sheet_corners` chỉ ngưỡng cố định `gray >= 100`, Canny/Hough không được dùng ngoài benchmark | **Đã sửa.** Nhánh Hough là đường chính: Canny → Hough → chấm support → cặp cạnh đối diện → Cramer. Ngưỡng cố định + hull + RDP chỉ còn là dự phòng. |
+| **1.5** | `"status": "PASS" if ... else "PASS"` (luôn PASS) tại 2 chỗ | **Đã sửa.** Cả hai nhánh `else` thành `"FAIL"`. Test `test_benchmark_status_can_fail` chèn số liệu giả để xác nhận FAIL thật sự xuất hiện. |
+| **2.2** | RDP nhận đa giác khép kín → luôn trả 2 điểm; lấy mẫu raster bỏ sót đỉnh | **Đã sửa.** `ramer_douglas_peucker` ném `ValueError` với đa giác khép kín; thêm `simplify_closed_polygon`; thay raster bằng cực trị hàng/cột (luôn chứa 4 đỉnh). |
+| **2.3** | Kiểm tra nền bàn tối dựa 4 pixel góc + hằng số 100 | **Đã sửa.** Trung vị 4 dải viền + Otsu + 3 tiêu chí, và **phát hiện thêm** lỗi bóng đổ một phía (mục 2.5). |
+| **2.7** | TV1 chạy 1.1–1.7 s, vượt ngưỡng test 1.5 s | **Đã sửa.** Còn 128 ms (DS-01) … 377 ms (DS-02); 33 test chạy trong 1.8 s. |
+| **3 (docstring)** | Tài liệu ghi $\theta \in [-\pi/2, \pi/2)$ nhưng code dùng $[0, \pi)$ | **Đã đồng bộ tài liệu** theo code. |
+| **3 (repo)** | `.pyc` trong `__pycache__` còn trong git | Ngoài phạm vi module. |
+
+### 8.2. Những điểm báo cáo cũ tuyên bố sai và đã đính chính
+
+Vì yêu cầu trung thực học thuật, các tuyên bố không kiểm chứng được trong báo cáo trước được ghi
+lại rõ ràng:
+
+1. "Toàn bộ thuật toán 100% from scratch" — **đúng**, đã kiểm chứng bằng rà soát import: luồng
+   chính chỉ dùng `numpy`, `cv2` xuất hiện trong hàm `*_cv` đối chứng và trong
+   `detect_sheet_corners(use_scratch=False)`.
+2. "Không thay đổi bất kỳ file nào đã có" — **sai sau đợt sửa**. Đã sửa 4 file nguồn, 1 file test,
+   thêm 1 script CLI; chi tiết ở 8.3.
+3. "18/18 unit tests" — **đã lỗi thời**. Hiện là **33/33**.
+4. Hough "MSE $= 0.0000$, PSNR $= 999.00$ dB" — **không hợp lệ về phương pháp**, đã thay bằng
+   Recall/Precision theo $(\rho, \theta)$.
+5. PSNR $69.54$ dB được trình bày như bằng chứng khử nhiễu — **sai ý nghĩa**, đó là độ trung thực
+   cài đặt. Khảo sát khử nhiễu thật ở mục 5.1.
+6. "297 ms/phiếu" — **không tái lập được**, đã thay bằng bảng đo thực tế (128–377 ms).
+7. Bảng ablation Gaussian và Canny cũ — **số liệu không tái lập**, đã đo lại toàn bộ.
+
+### 8.3. Danh sách thay đổi mã nguồn trong đợt này
+
+| File | Thay đổi |
+| :--- | :--- |
+| `src/tv1_canny.py` | Sobel viết lại bằng slicing (giữ nguyên kết quả, nhanh 2.4×); hysteresis vector hóa 8 bản dịch (nhanh ~10×, kết quả `array_equal` với BFS); bỏ import `deque` không dùng |
+| `src/tv1_hough.py` | Thêm `otsu_threshold_scratch`, `collect_boundary_extremes`, `simplify_closed_polygon`, `apply_parameter_space_nms`, `score_lines_by_edge_support`, `detect_quad_from_hough_lines`; `ramer_douglas_peucker` từ chối đa giác khép kín; `hough_lines_standard` dùng chung NMS |
+| `src/tv1_preprocessing.py` | Thêm `_border_band_stats`, `_is_sheet_surrounded_by_dark_desk`, `calculate_line_match_rate`; `detect_sheet_corners` nhận `precomputed_gray`/`precomputed_edges` và chạy Canny→Hough; benchmark có nhánh FAIL thật; demo xuất `7_hough_accumulator.png` |
+| `src/__init__.py` | Re-export 32 API |
+| `tests/test_tv1_hough.py` | +6 test (RDP khép kín, simplify, cực trị biên, Otsu, quad từ Hough, NMS tham số) |
+| `tests/test_tv1_benchmark.py` | Viết lại; +2 test hồi quy bóng đổ DS-05 |
+| `test_tv1.py` | Thêm kiểm thử nhánh Hough DS-02 và bóng đổ DS-05 |
+
+### 8.4. Minh chứng bàn giao
+
+- **Mã nguồn:** `OMR_System_TV1/src/` (4 module + `__init__.py`)
+- **Kiểm thử:** `OMR_System_TV1/tests/` — **33/33 PASSED** trong 1.8 s
+- **Script nghiệm thu nhanh:** `python test_tv1.py` — 6 bài test, tất cả `[PASS]`
+- **Sản phẩm trực quan:** `outputs/tv1/` gồm `1_input_sample.png` … `9_triplet_comparison.png`
+  (đã có `7_hough_accumulator.png`), kèm `benchmark_metrics.csv` và `benchmark_metrics.json`
+- **Tài liệu:** `README.md` và báo cáo này
+
+### 8.5. Kết luận
+
+Giai đoạn 1 hoàn thành đúng phạm vi: chuyển mức xám, lọc Gaussian, Canny 4 bước, Hough cực và
+định vị 4 góc phiếu — tất cả cài đặt thuần `NumPy`, đối chứng định lượng với OpenCV đạt hoặc vượt
+mọi chỉ tiêu (MSE 0, PSNR > 69 dB, IoU 99.02%, Hough Recall 100%, sai số góc ≤ 1.93 px), độ trễ
+128–377 ms/phiếu.
+
+Các lỗi Code Review chỉ ra trong phạm vi TV1 (1.2, 1.5, 2.2, 2.3, 2.7) đã được sửa và có test hồi
+quy khóa lại. Quá trình nghiệm thu còn phát hiện thêm một lỗi chưa được review nêu: **bóng đổ một
+phía bị nhầm thành nền bàn tối** (sai 67.19 px), đã sửa về 0.00 px.
+
+Các hạn chế còn lại được nêu trung thực ở mục 7: chưa có ground truth do người đo (chỉ đối chứng
+với OpenCV), chưa xử lý motion blur, và việc chuẩn hóa hướng xoay phiếu thuộc TV2.

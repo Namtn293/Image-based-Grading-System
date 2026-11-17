@@ -7,8 +7,8 @@
     "iou": null,
     "dice": null,
     "error_metric": "Max Diff: 0",
-    "time_scratch_ms": 20.408,
-    "time_opencv_ms": 2.431,
+    "time_scratch_ms": 19.005,
+    "time_opencv_ms": 2.707,
     "status": "PASS"
   },
   {
@@ -19,8 +19,8 @@
     "iou": null,
     "dice": null,
     "error_metric": "Max Diff: 1",
-    "time_scratch_ms": 39.494,
-    "time_opencv_ms": 0.659,
+    "time_scratch_ms": 40.104,
+    "time_opencv_ms": 0.648,
     "status": "PASS"
   },
   {
@@ -31,32 +31,32 @@
     "iou": 0.9902,
     "dice": 0.9951,
     "error_metric": "IoU: 99.02%",
-    "time_scratch_ms": 241.413,
-    "time_opencv_ms": 2.027,
+    "time_scratch_ms": 67.837,
+    "time_opencv_ms": 2.73,
     "status": "PASS"
   },
   {
     "module": "TV1",
     "algorithm": "Hough Lines Standard (rho=1, theta=1°)",
-    "mse": 0.0,
-    "psnr_db": 999.0,
-    "iou": null,
-    "dice": null,
-    "error_metric": "Lines found: Scratch=34, CV=79",
-    "time_scratch_ms": 157.934,
-    "time_opencv_ms": 7.4,
+    "mse": null,
+    "psnr_db": null,
+    "iou": 1.0,
+    "dice": 0.9118,
+    "error_metric": "Recall=100.0% / Precision=91.2% (Scratch=34, CV NMS=31)",
+    "time_scratch_ms": 139.572,
+    "time_opencv_ms": 6.227,
     "status": "PASS"
   },
   {
     "module": "TV1",
     "algorithm": "Sheet Corner Localization (4 góc)",
-    "mse": 0.0,
-    "psnr_db": 999.0,
+    "mse": null,
+    "psnr_db": null,
     "iou": null,
     "dice": null,
     "error_metric": "Corner Dist: 0.00 px",
-    "time_scratch_ms": 21.47,
-    "time_opencv_ms": 0.274,
+    "time_scratch_ms": 43.87,
+    "time_opencv_ms": 4.587,
     "status": "PASS"
   }
 ]

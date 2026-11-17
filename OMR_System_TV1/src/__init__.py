@@ -28,6 +28,12 @@ from .tv1_hough import (
     order_quad_corners,
     convex_hull_2d,
     ramer_douglas_peucker,
+    simplify_closed_polygon,
+    apply_parameter_space_nms,
+    otsu_threshold_scratch,
+    collect_boundary_extremes,
+    score_lines_by_edge_support,
+    detect_quad_from_hough_lines,
     detect_quad_from_boundary_scratch
 )
 
@@ -37,7 +43,8 @@ from .tv1_preprocessing import (
     run_unit_benchmarks,
     calculate_mse,
     calculate_psnr,
-    calculate_binary_iou_dice
+    calculate_binary_iou_dice,
+    calculate_line_match_rate
 )
 
 __all__ = [
@@ -59,11 +66,18 @@ __all__ = [
     "order_quad_corners",
     "convex_hull_2d",
     "ramer_douglas_peucker",
+    "simplify_closed_polygon",
+    "apply_parameter_space_nms",
+    "otsu_threshold_scratch",
+    "collect_boundary_extremes",
+    "score_lines_by_edge_support",
+    "detect_quad_from_hough_lines",
     "detect_quad_from_boundary_scratch",
     "detect_sheet_corners",
     "process_preprocessing_pipeline",
     "run_unit_benchmarks",
     "calculate_mse",
     "calculate_psnr",
-    "calculate_binary_iou_dice"
+    "calculate_binary_iou_dice",
+    "calculate_line_match_rate"
 ]
