@@ -13,12 +13,15 @@ import sys
 import numpy as np
 import cv2
 
-# Add project root to sys.path
+# Add project root and src to sys.path
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = os.path.join(BASE_DIR, "src")
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-from src.tv4_enhancement_eval import (
+from tv4_enhancement_eval import (
     histogram_equalization_scratch,
     median_filter_scratch,
     save_matrix_to_csv,
@@ -30,7 +33,7 @@ from src.tv4_enhancement_eval import (
     benchmark_all_modules,
     OMRGrader
 )
-from src.pipeline_coordinator import OMRPipeline
+from pipeline_coordinator import OMRPipeline
 
 
 def print_header(title: str):
@@ -101,8 +104,10 @@ def main():
     print(f"    - Kieu du lieu: {csv_loaded.dtype}, Min: {csv_loaded.min()}, Max: {csv_loaded.max()}")
 
     # Apply filter on CSV matrix and save back
+    outputs_dir = os.path.join(BASE_DIR, "outputs")
+    os.makedirs(outputs_dir, exist_ok=True)
     csv_filtered = median_filter_scratch(csv_loaded, kernel_size=3)
-    out_csv = os.path.join(data_dir, "sample_matrix_filtered.csv")
+    out_csv = os.path.join(outputs_dir, "sample_matrix_filtered.csv")
     save_matrix_to_csv(csv_filtered, out_csv)
     print(f"[*] Da xuat ma tran ket qua loc ra CSV: {out_csv} [PASS]")
 
@@ -152,12 +157,12 @@ def main():
             16: 'D', 17: 'A', 18: 'B', 19: 'C', 20: 'A'
         })
     batch_results = [gr, gr2]
-    excel_path = os.path.join(data_dir, "Ket_Qua_Cham_Thi.xlsx")
+    excel_path = os.path.join(outputs_dir, "Ket_Qua_Cham_Thi.xlsx")
     OMRGrader.generate_excel_report(batch_results, excel_path)
     print(f"\n[*] Da xuat bao cao ket qua ra file Excel: {excel_path} [PASS]")
 
     # Save visual result
-    out_vis_path = os.path.join(data_dir, "sample_sheet_graded.png")
+    out_vis_path = os.path.join(outputs_dir, "sample_sheet_graded.png")
     cv2.imwrite(out_vis_path, res["annotated_image"])
     print(f"[*] Da luu anh phieu cham truc quan tai: {out_vis_path} [PASS]")
 

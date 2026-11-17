@@ -37,7 +37,9 @@ try:
     )
     from pipeline_coordinator import OMRPipeline, _resolve_bubble_grid, detect_sheet_questions
 except ImportError:
-    from src.tv4_enhancement_eval import (
+    if SRC_DIR not in sys.path:
+        sys.path.insert(0, SRC_DIR)
+    from tv4_enhancement_eval import (
         histogram_equalization_scratch,
         median_filter_scratch,
         _pad_2d_scratch,
@@ -56,7 +58,7 @@ except ImportError:
         run_ablation_study,
         OMRGrader
     )
-    from src.pipeline_coordinator import OMRPipeline, _resolve_bubble_grid, detect_sheet_questions
+    from pipeline_coordinator import OMRPipeline, _resolve_bubble_grid, detect_sheet_questions
 
 
 class TestTV4Algorithms(unittest.TestCase):

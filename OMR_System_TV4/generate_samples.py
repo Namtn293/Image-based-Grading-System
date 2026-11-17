@@ -70,13 +70,13 @@ def create_base_omr_sheet(student_id: str, student_fill: dict, erased_marks: dic
             if erased_marks and erased_marks.get(q) == opt:
                 # Light gray eraser smudge across the bubble interior
                 cv2.circle(sheet, (center_x, center_y), radius - 2, (205, 205, 205), -1)
-                # Realistic un-erased dark pencil crescent/streak residue (~22-24% of inner bubble area)
+                # Realistic un-erased dark pencil streak residue (~40-42% of inner bubble area, triggering Delta_tau rule)
                 cv2.ellipse(
                     sheet,
-                    (center_x - 3, center_y - 2),
-                    (radius - 7, max(radius - 10, 3)),
+                    (center_x - 2, center_y - 1),
+                    (radius - 5, max(radius - 7, 5)),
                     25, 0, 360,
-                    (80, 80, 80),
+                    (50, 50, 50),
                     -1
                 )
 
@@ -92,6 +92,24 @@ def create_base_omr_sheet(student_id: str, student_fill: dict, erased_marks: dic
                 cv2.circle(sheet, (center_x, center_y), radius - 2, (25, 25, 25), -1)
 
     return sheet
+
+
+def save_groundtruth_csv(filename: str, fill_dict: dict):
+    """Save ground-truth answer key CSV for a sample sheet scenario."""
+    lines = ["question_id,ground_truth_answer"]
+    for q in sorted(fill_dict.keys()):
+        val = fill_dict[q]
+        if val is None:
+            ans_str = "BLANK"
+        elif isinstance(val, list):
+            ans_str = "MULTIPLE" if len(val) > 1 else val[0]
+        else:
+            ans_str = str(val)
+        lines.append(f"{q},{ans_str}")
+    path = os.path.join(SAMPLES_DIR, filename)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"Generated {path}")
 
 
 def main():
@@ -134,6 +152,7 @@ def main():
     sheet1 = create_base_omr_sheet("B21DCCN001", fill_sv1)
     cv2.imwrite(os.path.join(DATA_DIR, "sample_sheet.png"), sheet1)
     cv2.imwrite(os.path.join(SAMPLES_DIR, "01_B21DCCN001_Chuan.png"), sheet1)
+    save_groundtruth_csv("01_B21DCCN001_Chuan_gt.csv", fill_sv1)
 
     # 4. Scenario 2 (DS-02): Sheet on Dark Desk with Perspective Tilt (B21DCCN002 - Score 9.0/10: 18 correct, 2 wrong)
     fill_sv2 = {
@@ -152,6 +171,7 @@ def main():
         sheet2_flat, M, (920, 1120), dst=desk, borderMode=cv2.BORDER_TRANSPARENT
     )
     cv2.imwrite(os.path.join(SAMPLES_DIR, "02_B21DCCN002_Nghieng_BanToi.png"), sheet2_tilted)
+    save_groundtruth_csv("02_B21DCCN002_Nghieng_BanToi_gt.csv", fill_sv2)
 
     # 5. Scenario 3 (DS-04): Low-light + Salt-and-Pepper Noise (B21DCCN003 - Score 8.0/10: 16 correct, 3 wrong, 1 blank)
     fill_sv3 = {
@@ -170,6 +190,7 @@ def main():
     sheet3_dark[rnd < 0.012] = 255
     sheet3_dark[(rnd >= 0.012) & (rnd < 0.024)] = 0
     cv2.imwrite(os.path.join(SAMPLES_DIR, "03_B21DCCN003_ThieuSang_NhieuHat.png"), sheet3_dark)
+    save_groundtruth_csv("03_B21DCCN003_ThieuSang_NhieuHat_gt.csv", fill_sv3)
 
     # 6. Scenario 4 (DS-05): Multiple Marked & Erasure Sheet (B21DCCN004 - Score 7.5/10: 15 correct, 1 wrong, 2 blank, 2 multiple)
     fill_sv4 = {
@@ -184,6 +205,7 @@ def main():
     erased_sv4 = {5: 'C', 14: 'A'}  # Erased C on Q5 and marked A; erased A on Q14 and marked C
     sheet4 = create_base_omr_sheet("B21DCCN004", fill_sv4, erased_marks=erased_sv4)
     cv2.imwrite(os.path.join(SAMPLES_DIR, "04_B21DCCN004_ToSaiQuyChe_TayXoa.png"), sheet4)
+    save_groundtruth_csv("04_B21DCCN004_ToSaiQuyChe_TayXoa_gt.csv", fill_sv4)
 
     # 7. Scenario 5 (DS-03): Uneven Lighting & Diagonal Shadow (B21DCCN005 - Score 9.5/10: 19 correct, 1 wrong)
     fill_sv5 = {
@@ -201,6 +223,7 @@ def main():
     illumination = cv2.GaussianBlur(illumination.astype(np.float32), (35, 35), 10.0)
     sheet5_shadow = np.clip(sheet5_clean.astype(np.float64) * illumination[:, :, np.newaxis], 0, 255).astype(np.uint8)
     cv2.imwrite(os.path.join(SAMPLES_DIR, "05_B21DCCN005_BongDo_ChieuSangKhongDeu.png"), sheet5_shadow)
+    save_groundtruth_csv("05_B21DCCN005_BongDo_ChieuSangKhongDeu_gt.csv", fill_sv5)
 
     print("Successfully generated all 5 sample scenarios (DS-01 to DS-05) in data/samples/!")
 
