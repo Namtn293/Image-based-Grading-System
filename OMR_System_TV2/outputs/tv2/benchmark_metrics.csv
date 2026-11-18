@@ -1,0 +1,5 @@
+module,algorithm,mse,psnr_db,iou,dice,error_metric,time_scratch_ms,time_opencv_ms,status
+TV2,Homography 3x3 (Normalized DLT + SVD),0.0,999.0,,,Max |H_sc - H_cv|: 7.11e-14,0.348,0.012,PASS
+TV2,Inverse Warping + Bilinear (800x1000),0.000168,85.89,,,Max Diff: 1,310.908,2.759,PASS
+TV2,NCC Template Matching (32x32),0.0,999.0,,,"Max |NCC diff|: 5.29e-05 (vùng phẳng: 5.5e-03); peak (47, 21) vs (47, 21)",37.271,2.032,PASS
+TV2,Pipeline TV2 end-to-end (warp_perspective_sheet),0.000168,85.89,,,Max Diff: 1,259.946,1.985,PASS

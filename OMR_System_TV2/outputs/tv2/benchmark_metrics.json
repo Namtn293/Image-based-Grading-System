@@ -1,0 +1,50 @@
+[
+  {
+    "module": "TV2",
+    "algorithm": "Homography 3x3 (Normalized DLT + SVD)",
+    "mse": 0.0,
+    "psnr_db": 999.0,
+    "iou": null,
+    "dice": null,
+    "error_metric": "Max |H_sc - H_cv|: 7.11e-14",
+    "time_scratch_ms": 0.348,
+    "time_opencv_ms": 0.012,
+    "status": "PASS"
+  },
+  {
+    "module": "TV2",
+    "algorithm": "Inverse Warping + Bilinear (800x1000)",
+    "mse": 0.000168,
+    "psnr_db": 85.89,
+    "iou": null,
+    "dice": null,
+    "error_metric": "Max Diff: 1",
+    "time_scratch_ms": 310.908,
+    "time_opencv_ms": 2.759,
+    "status": "PASS"
+  },
+  {
+    "module": "TV2",
+    "algorithm": "NCC Template Matching (32x32)",
+    "mse": 0.0,
+    "psnr_db": 999.0,
+    "iou": null,
+    "dice": null,
+    "error_metric": "Max |NCC diff|: 5.29e-05 (vùng phẳng: 5.5e-03); peak (47, 21) vs (47, 21)",
+    "time_scratch_ms": 37.271,
+    "time_opencv_ms": 2.032,
+    "status": "PASS"
+  },
+  {
+    "module": "TV2",
+    "algorithm": "Pipeline TV2 end-to-end (warp_perspective_sheet)",
+    "mse": 0.000168,
+    "psnr_db": 85.89,
+    "iou": null,
+    "dice": null,
+    "error_metric": "Max Diff: 1",
+    "time_scratch_ms": 259.946,
+    "time_opencv_ms": 1.985,
+    "status": "PASS"
+  }
+]
