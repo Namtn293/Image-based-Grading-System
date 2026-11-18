@@ -51,9 +51,13 @@ from src.tv3_roi_classifier import (
 )
 from src.tv3_segmentation import (
     TV3PipelineConfig,
+    OMRSharedConfig,
     TV3PipelineResult,
     TV3SegmentationPipeline,
     run_tv3_pipeline,
+    detect_bubble_grid_scratch,
+    extract_bubble_answers,
+    extract_bubble_answers_with_warnings,
     generate_synthetic_omr_sheet,
     visualize_pipeline_steps,
 )
@@ -345,3 +349,133 @@ def test_run_tv3_pipeline_and_file_export(tmp_path, synthetic_ds01_clean):
     assert len(saved_images) == 6
     for k, v in saved_images.items():
         assert os.path.exists(v)
+
+
+# ==============================================================================
+# 9. KIỂM THỬ CÁC MỤC CODE REVIEW (1.1, 1.3, 1.4, 2.1, 2.6, 3)
+# ==============================================================================
+
+def test_extract_bubble_answers_and_scratch_opencv_parity(synthetic_ds03_shadow):
+    """
+    Xác thực Mục 1.3 & 1.4:
+    - extract_bubble_answers chạy không lỗi AttributeError.
+    - Chế độ Scratch (use_scratch=True) và OpenCV (use_scratch=False) dùng chung 1 config
+      và cho kết quả giống nhau 100% trên cả 20 câu.
+    """
+    sheet_gray, gt_answers, _, grid_rois = synthetic_ds03_shadow
+    shared_cfg = OMRSharedConfig(
+        block_size=25,
+        C=10.0,
+        bubble_radius=12.0,
+        inner_radius_offset=0.0,
+        tau_min=0.38,
+        delta_tau_min=0.15,
+    )
+
+    ans_sc, ratios_sc, vis_sc = extract_bubble_answers(
+        warped_gray=sheet_gray,
+        total_questions=20,
+        fill_threshold=0.38,
+        use_scratch=True,
+        question_grid=grid_rois,
+        config=shared_cfg,
+    )
+    ans_cv, ratios_cv, vis_cv = extract_bubble_answers(
+        warped_gray=sheet_gray,
+        total_questions=20,
+        fill_threshold=0.38,
+        use_scratch=False,
+        question_grid=grid_rois,
+        config=shared_cfg,
+    )
+
+    assert len(ans_sc) == 20
+    assert ans_sc == ans_cv
+    assert vis_sc.shape == (1000, 800, 3)
+    assert vis_cv.shape == (1000, 800, 3)
+
+    for q_id in range(1, 21):
+        expected = gt_answers[q_id]
+        if expected is not None:
+            assert ans_sc[q_id] == expected
+        elif q_id == 15:
+            assert ans_sc[q_id] == "MULTIPLE"
+        else:
+            assert ans_sc[q_id] == "BLANK"
+        for opt in ("A", "B", "C", "D"):
+            assert ratios_sc[q_id][opt] == pytest.approx(ratios_cv[q_id][opt], abs=1e-4)
+
+
+def test_extract_bubble_answers_preserves_erased_valid_warnings(synthetic_ds03_shadow):
+    """Xác thực Mục 2.1: Bảo toàn cảnh báo ERASED_VALID cho Tab 4."""
+    sheet_gray, _, _, grid_rois = synthetic_ds03_shadow
+    cfg = OMRSharedConfig(bubble_radius=12.0, inner_radius_offset=0.0)
+
+    answers, _, _, details = extract_bubble_answers_with_warnings(
+        warped_gray=sheet_gray,
+        total_questions=20,
+        fill_threshold=0.38,
+        use_scratch=True,
+        question_grid=grid_rois,
+        config=cfg,
+    )
+
+    assert answers[8] == "C"
+    assert answers[17] == "C"
+    assert details["statuses"][8] == STATUS_ERASED_VALID
+    assert details["statuses"][17] == STATUS_ERASED_VALID
+    assert 8 in details["erased_questions"]
+    assert 17 in details["erased_questions"]
+    assert 8 in details["warnings"]
+    assert 17 in details["warnings"]
+
+
+def test_detect_bubble_grid_scratch_without_cv2_findcontours():
+    """Xác thực Mục 1.1: Dò lưới ô tròn hoàn toàn bằng Scratch Adaptive + Two-Pass CCL."""
+    img = np.full((1000, 800), 240, dtype=np.uint8)
+    grid_gt = {}
+    for q in range(1, 21):
+        is_col2 = q > 10
+        row = (q - 1) % 10
+        bx = 470.0 if is_col2 else 110.0
+        by = 170.0 + row * 70.0
+        grid_gt[q] = {}
+        for opt_idx, opt in enumerate(("A", "B", "C", "D")):
+            cx = bx + opt_idx * 55.0
+            cy = by
+            grid_gt[q][opt] = (cx, cy)
+            cv2.circle(img, (int(cx), int(cy)), 12, 35, -1)
+
+    detected_grid, stats = detect_bubble_grid_scratch(img, num_questions=20, use_scratch=True)
+    assert len(stats) == 80
+    assert len(detected_grid) == 20
+    for q in range(1, 21):
+        for opt in ("A", "B", "C", "D"):
+            gx, gy = grid_gt[q][opt]
+            dx, dy = detected_grid[q][opt]
+            assert abs(gx - dx) < 2.0 and abs(gy - dy) < 2.0
+
+
+def test_no_cv2_import_in_core_modules_and_tv3_package_import():
+    """Xác thực Mục 2.6 & Mục 3: Core modules không import cv2 ở top-level và import được qua package `tv3`."""
+    import subprocess
+
+    code = (
+        "import sys; "
+        "sys.modules['cv2'] = None; "
+        "import tv3; "
+        "from tv3.tv3_thresholding import otsu_threshold_scratch, adaptive_mean_threshold_scratch; "
+        "from tv3.tv3_morphology_ccl import two_pass_ccl_scratch, opening_binary_scratch; "
+        "from tv3.tv3_roi_classifier import recognize_all_questions; "
+        "from tv3.tv3_segmentation import TV3SegmentationPipeline; "
+        "import numpy as np; "
+        "img = np.full((60, 60), 220, dtype=np.uint8); "
+        "img[20:35, 20:35] = 40; "
+        "pipe = TV3SegmentationPipeline(); "
+        "res = pipe.run(img, run_opencv_benchmark=False); "
+        "assert res.execution_mode == 'scratch'; "
+        "print('OK')"
+    )
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert proc.stdout.strip() == "OK"
+

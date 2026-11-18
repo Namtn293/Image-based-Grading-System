@@ -324,3 +324,60 @@ def test_edge_cases_and_boundary_safety():
     ratio_bool = compute_bubble_fill_ratio_scratch(bool_img, center=(15.0, 15.0), radius=5.0)
     assert ratio_bool > 0.8
 
+
+def test_auto_align_grid_two_columns():
+    """Kiểm thử auto_align_grid_from_centroids trên phiếu 2 cột (20 câu, 80 ô)."""
+    np.random.seed(99)
+    centroids = []
+    # Cột 1: x ~ 110..275, Cột 2: x ~ 470..635
+    for col_x in (110.0, 470.0):
+        for row in range(10):
+            cy = 170.0 + row * 70.0
+            for opt in range(4):
+                cx = col_x + opt * 55.0
+                centroids.append((cx + np.random.uniform(-1.0, 1.0), cy + np.random.uniform(-1.0, 1.0)))
+
+    np.random.shuffle(centroids)
+    grid = auto_align_grid_from_centroids(centroids, num_questions=20)
+    assert len(grid) == 20
+
+    # Câu 1..10 ở cột 1, câu 11..20 ở cột 2
+    for q in range(1, 11):
+        assert grid[q]["A"][0] < 200.0
+        assert grid[q]["A"][0] < grid[q]["B"][0] < grid[q]["C"][0] < grid[q]["D"][0]
+    for q in range(11, 21):
+        assert grid[q]["A"][0] > 400.0
+        assert grid[q]["A"][0] < grid[q]["B"][0] < grid[q]["C"][0] < grid[q]["D"][0]
+
+
+def test_auto_align_grid_missing_option_a_no_label_shift():
+    """Nếu thiếu ô A ở một câu hỏi, B/C/D không bị dồn nhãn sang A/B/C."""
+    centroids = []
+    base_x, base_y, step_x, step_y = 100.0, 100.0, 50.0, 60.0
+    for q in range(5):
+        for opt in range(4):
+            # Cố tình bỏ ô A của câu 3 (q == 2, opt == 0)
+            if q == 2 and opt == 0:
+                continue
+            centroids.append((base_x + opt * step_x, base_y + q * step_y))
+
+    grid = auto_align_grid_from_centroids(centroids, num_questions=5)
+    assert len(grid) == 5
+    # Ô B của câu 3 vẫn nằm đúng x ~ 150.0, không bị lệch về 100.0; ô A được nội suy về ~100.0
+    assert grid[3]["A"][0] == pytest.approx(100.0, abs=2.0)
+    assert grid[3]["B"][0] == pytest.approx(150.0, abs=2.0)
+    assert grid[3]["C"][0] == pytest.approx(200.0, abs=2.0)
+    assert grid[3]["D"][0] == pytest.approx(250.0, abs=2.0)
+
+
+def test_fill_ratio_precomputed_threshold_equivalence():
+    """Đảm bảo compute_bubble_fill_ratio_scratch cho kết quả giống hệt khi truyền binary_threshold."""
+    img = np.zeros((60, 60), dtype=np.uint8)
+    y, x = np.ogrid[:60, :60]
+    img[((x - 30) ** 2 + (y - 30) ** 2) <= 100] = 255
+
+    r1 = compute_bubble_fill_ratio_scratch(img, (30.0, 30.0), 10.0)
+    r2 = compute_bubble_fill_ratio_scratch(img, (30.0, 30.0), 10.0, binary_threshold=127.0)
+    assert r1 == pytest.approx(r2, abs=1e-6)
+
+

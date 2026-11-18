@@ -674,11 +674,11 @@
     "num_filtered_bubbles": 25,
     "threshold_value": null,
     "latency_ms": {
-        "thresholding_ms": 67.116,
-        "morphology_ms": 76.252,
-        "ccl_ms": 162.973,
-        "roi_recognition_ms": 13.987,
-        "total_pipeline_scratch_ms": 320.355
+        "thresholding_ms": 36.728,
+        "morphology_ms": 38.846,
+        "ccl_ms": 63.402,
+        "roi_recognition_ms": 2.827,
+        "total_pipeline_scratch_ms": 141.815
     },
     "benchmark_opencv": {
         "threshold_metrics": {
@@ -702,10 +702,10 @@
         "ccl_opencv_count": 62,
         "ccl_count_match": true,
         "latency_opencv_ms": {
-            "thresholding_ms": 13.233,
-            "morphology_ms": 2.571,
-            "ccl_ms": 9.68,
-            "total_opencv_ms": 25.541
+            "thresholding_ms": 5.333,
+            "morphology_ms": 0.895,
+            "ccl_ms": 5.331,
+            "total_opencv_ms": 11.569
         },
         "acceptance_criteria": {
             "delta_otsu_pass": true,

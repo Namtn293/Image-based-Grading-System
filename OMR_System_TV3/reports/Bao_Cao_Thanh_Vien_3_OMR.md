@@ -188,9 +188,9 @@ c:\Users\Admin\Desktop\xla\
 │   └── tv3_segmentation.py        # TV3SegmentationPipeline tích hợp đầu-cuối & Standalone CLI
 ├── tests\
 │   ├── test_tv3_thresholding.py   # 37 Unit tests cho ngưỡng Otsu và Adaptive
-│   ├── test_tv3_morphology_ccl.py # 17 Unit tests cho Morphology và Two-Pass CCL
-│   ├── test_tv3_roi_classifier.py # 7 Unit tests cho Fill Ratio và phân loại đáp án
-│   └── test_tv3_benchmark.py      # 8 Integration tests nghiệm thu toàn diện tiêu chí đề tài
+│   ├── test_tv3_morphology_ccl.py # 18 Unit tests cho Morphology và Two-Pass CCL
+│   ├── test_tv3_roi_classifier.py # 10 Unit tests cho Fill Ratio, auto-grid và phân loại đáp án
+│   └── test_tv3_benchmark.py      # 12 Integration tests nghiệm thu & xử lý các mục Code Review
 ├── outputs\tv3\                   # Toàn bộ sản phẩm ảnh và số liệu xuất tự động
 │   ├── 1_input_warped.png         # Ảnh xám phiếu thi đầu vào
 │   ├── 2_thresholded.png          # Ảnh sau phân ngưỡng nhị phân
@@ -216,15 +216,19 @@ Thực nghiệm được tiến hành trên phiếu thi OMR chuẩn kích thư�
 
 | Giai đoạn xử lý thuật toán | Thuật toán NumPy Scratch | Hàm OpenCV đối chứng | MSE | PSNR (dB) | IoU (%) | Dice (%) | Thời gian Scratch (ms) | Thời gian OpenCV (ms) | Đánh giá nghiệm thu |
 | :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Phân ngưỡng thích nghi** | `adaptive_mean_threshold_scratch` | `cv2.adaptiveThreshold` | $0.0000$ | $\infty$ ($999.0$) | **$100.00\%$** | $100.00\%$ | $34.2\text{ ms}$ | $1.9\text{ ms}$ | **ĐẠT XUẤT SẮC** ($\text{IoU} \ge 98.5\%$) |
-| **Xử lý hình thái học** | `opening_` + `closing_binary_scratch` | `cv2.morphologyEx` (OPEN+CLOSE) | $0.0000$ | $\infty$ ($999.0$) | **$100.00\%$** | $100.00\%$ | $98.6\text{ ms}$ | $3.8\text{ ms}$ | **ĐẠT XUẤT SẮC** ($\text{IoU} \ge 98.5\%$) |
-| **Gán nhãn liên thông** | `two_pass_ccl_scratch` | `cv2.connectedComponentsWithStats` | - | - | - | - | $28.5\text{ ms}$ | $4.1\text{ ms}$ | **ĐẠT** (Khớp $62/62$ vùng, $100\%$) |
-| **Nhận diện ROI & Chấm** | `recognize_all_questions` | - | - | - | - | - | $5.1\text{ ms}$ | - | **ĐẠT** (Độ chính xác $100\%$) |
-| **TOÀN BỘ PIPELINE TV3** | `TV3SegmentationPipeline` | Full OpenCV Counterpart | - | - | **$100.00\%$** | **$100.00\%$** | **$166.4\text{ ms}$** | **$9.8\text{ ms}$** | **VƯỢT CHỈ TIÊU** ($< 460\text{ ms}$) |
+| **Phân ngưỡng thích nghi** | `adaptive_mean_threshold_scratch` | `cv2.adaptiveThreshold` | $0.0000$ | $999.0$ ($\infty$) | **$100.00\%$** | $100.00\%$ | $50.4\text{ ms}$ | $10.4\text{ ms}$ | **ĐẠT XUẤT SẮC** ($\text{IoU} \ge 98.5\%$) |
+| **Xử lý hình thái học** | `opening_` + `closing_binary_scratch` | `cv2.morphologyEx` (OPEN+CLOSE) | $0.0000$ | $999.0$ ($\infty$) | **$100.00\%$** | $100.00\%$ | $55.8\text{ ms}$ | $1.0\text{ ms}$ | **ĐẠT XUẤT SẮC** ($\text{IoU} \ge 98.5\%$) |
+| **Gán nhãn liên thông** | `two_pass_ccl_scratch` | `cv2.connectedComponentsWithStats` | - | - | - | - | $131.3\text{ ms}$ | $6.2\text{ ms}$ | **ĐẠT** (Khớp $62/62$ vùng, $100\%$) |
+| **Nhận diện ROI & Chấm** | `recognize_all_questions` | - | - | - | - | - | $5.0\text{ ms}$ | - | **ĐẠT** (Độ chính xác $100\%$) |
+| **TOÀN BỘ PIPELINE TV3** | `TV3SegmentationPipeline` | Full OpenCV Counterpart | - | - | **$100.00\%$** | **$100.00\%$** | **$242.6\text{ ms}$** | **$17.6\text{ ms}$** | **VƯỢT CHỈ TIÊU** ($< 460\text{ ms}$) |
 
 ### 4.2. Phân tích kết quả:
-1. **Độ trùng khớp số học tuyệt đối:** Chỉ số $\text{IoU} = 100.00\%$ và $\text{PSNR} = \infty$ chứng minh thuật toán phân ngưỡng cục bộ qua Bảng Ảnh tích phân và các phép toán Morphology bằng `sliding_window_view` của nhóm đạt độ chuẩn xác toán học tương đương $100\%$ so với mã nguồn C++ tối ưu của OpenCV.
-2. **Thời gian đáp ứng (Latency):** Toàn bộ pipeline tự code thuần túy bằng Python/NumPy chỉ mất **$166.4\text{ ms}$ / phiếu**, hoàn toàn vượt trội so với mục tiêu đặt ra trong Kế hoạch đề tài ($460\text{ ms}$ tại Bảng 7.2), đáp ứng xuất sắc yêu cầu xử lý thời gian thực khi chấm bài số lượng lớn.
+1. **Độ trùng khớp số học tuyệt đối:** Chỉ số $\text{IoU} = 100.00\%$ và $\text{PSNR} = 999.0\text{ dB}$ ($\text{MSE} = 0$) chứng minh thuật toán phân ngưỡng cục bộ qua Bảng Ảnh tích phân và các phép toán Morphology bằng `sliding_window_view` của nhóm đạt độ chuẩn xác toán học tương đương $100\%$ so với mã nguồn C++ tối ưu của OpenCV.
+2. **Thời gian đáp ứng (Latency):** Toàn bộ pipeline tự code thuần túy bằng Python/NumPy chỉ mất **$242.6\text{ ms}$ / phiếu**, hoàn toàn vượt trội so với mục tiêu đặt ra trong Kế hoạch đề tài ($460\text{ ms}$ tại Bảng 7.2), đáp ứng xuất sắc yêu cầu xử lý thời gian thực khi chấm bài số lượng lớn.
+3. **Tối ưu hiệu năng & Đồng bộ sau Code Review:**
+   - Rút gọn bước đánh lại nhãn Two-Pass CCL từ $O(K \cdot L)$ xuống $O(K + L)$ và lọc LUT trong `filter_bubble_components`, loại bỏ nút cổ chai trên ảnh nhiều nhiễu.
+   - Tính ngưỡng nhị phân một lần trong `recognize_all_questions` thay vì gọi `np.max(binary_image)` lặp lại cho từng ô.
+   - Chuyển toàn bộ `import cv2` vào trong các hàm benchmark/trực quan hóa để module lõi chạy độc lập 100% chỉ cần `NumPy`.
 
 ---
 
@@ -307,15 +311,15 @@ tv3_result.save_json("outputs/tv3/recognition_results.json")
 ## 8. KẾT LUẬN VÀ MINH CHỨNG NGHIỆM THU
 
 * **Khối lượng công việc:** Thành viên 3 đã hoàn thành $100\%$ khối lượng công việc được giao theo đúng kế hoạch đề tài, bao gồm:
-  - 04 file mã nguồn kỹ thuật tại `src/` đạt chuẩn PEP8, type hints đầy đủ.
-  - 04 file kiểm thử tại `tests/` với **69/69 test cases vượt qua (100% Pass)**.
+  - 04 file mã nguồn kỹ thuật tại `src/` (đóng gói thành package `tv3` qua `pyproject.toml`, không chèn `sys.path` gây xung đột).
+  - 04 file kiểm thử tại `tests/` với **77/77 test cases vượt qua (100% Pass)**.
   - Bộ sinh dữ liệu mô phỏng OMR và bộ trực quan hóa Triplet View đạt chuẩn báo cáo khoa học.
 * **Xác nhận chỉ tiêu nghiệm thu:**
   - $\Delta T_{\text{Otsu}} \le 1.0$ mức xám: **ĐẠT** ($\Delta T = 0.0$).
   - $\text{IoU}_{\text{bin}} \ge 98.5\%$: **ĐẠT XUẤT SẮC** ($\text{IoU} = 100.0\%$).
-  - $\text{PSNR} \ge 48\text{ dB}$: **ĐẠT** ($\text{PSNR} = \infty$).
+  - $\text{PSNR} \ge 48\text{ dB}$: **ĐẠT** ($\text{PSNR} = 999.0\text{ dB}$).
   - Độ chính xác nhận diện đáp án trên phiếu kiểm thử: **$100.0\%$ (20/20 câu)**.
   - Khớp số lượng thành phần liên thông CCL với OpenCV: **$100\%$ (62/62 thành phần)**.
-  - Tốc độ thực thi: **$166.4\text{ ms}$ / phiếu** (nhanh hơn $\approx 2.8$ lần so với mục tiêu $460\text{ ms}$).
+  - Tốc độ thực thi: **$242.6\text{ ms}$ / phiếu** (nhanh hơn $\approx 1.9$ lần so với mục tiêu $460\text{ ms}$).
 
 *Báo cáo được hoàn thiện và đóng gói phục vụ bảo vệ đề tài môn học Xử lý ảnh số (INT13146).*

@@ -333,6 +333,24 @@ class TestBenchmarkFunctions(unittest.TestCase):
         self.assertEqual(ccl_res["max_bbox_delta_px"], 0)
         self.assertLess(ccl_res["max_centroid_delta_px"], 1e-4)
 
+    def test_ccl_noisy_image_performance_and_psnr_consistency(self):
+        """Kiểm thử hiệu năng CCL O(K+L) trên ảnh nhiễu 15% và chuẩn PSNR=999.0 khi trùng khớp."""
+        import time
+
+        np.random.seed(7)
+        noisy = (np.random.rand(250, 250) > 0.85).astype(np.uint8) * 255
+        t0 = time.perf_counter()
+        k_sc, labels_sc, _ = two_pass_ccl_scratch(noisy, connectivity=8)
+        elapsed = time.perf_counter() - t0
+
+        num_cv, _, _, _ = cv2.connectedComponentsWithStats(noisy, connectivity=8)
+        self.assertEqual(k_sc, num_cv - 1)
+        self.assertLess(elapsed, 0.5, f"CCL quá chậm trên ảnh nhiễu 15%: {elapsed:.3f}s")
+
+        # PSNR khi hai ảnh trùng khớp phải thống nhất bằng 999.0
+        metrics_same = calc_binary_metrics(noisy, noisy)
+        self.assertEqual(metrics_same["psnr_db"], 999.0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -20,7 +20,6 @@ Nội dung cài đặt:
 from typing import Dict, List, Tuple, Union, Optional, Any
 import time
 import numpy as np
-import cv2
 
 
 # =============================================================================
@@ -415,10 +414,11 @@ def two_pass_ccl_scratch(
     ordered_roots = unique_roots[np.argsort(first_indices)]
     num_components = len(ordered_roots)
 
-    # Tạo bảng tra cứu ánh xạ nhãn cuối cùng: raw_label -> continuous label
-    final_lut = np.zeros(num_raw_labels, dtype=np.int32)
-    for new_id, root_val in enumerate(ordered_roots, start=1):
-        final_lut[lut == root_val] = new_id
+    # Tạo bảng tra cứu ánh xạ nhãn cuối cùng: raw_label -> continuous label O(K + L)
+    root_to_new = np.zeros(num_raw_labels, dtype=np.int32)
+    if num_components > 0:
+        root_to_new[ordered_roots] = np.arange(1, num_components + 1, dtype=np.int32)
+    final_lut = root_to_new[lut]
 
     # Cập nhật toàn bộ ma trận nhãn bằng phép chỉ mục mảng NumPy tốc độ C
     final_labels = final_lut[labels]
@@ -516,16 +516,18 @@ def filter_bubble_components(
             filtered_stats.append(item)
             valid_labels_set.add(item["label"])
 
-    # Tạo ma trận nhãn đã lọc
-    filtered_labels = np.zeros_like(labels)
-    # Ánh xạ nhãn mới liên tục 1 .. M
+    # Tạo ma trận nhãn đã lọc bằng bảng tra cứu LUT O(H*W) thay vì O(M*H*W)
+    max_lbl = int(labels.max()) if labels.size > 0 else 0
+    filter_lut = np.zeros(max_lbl + 1, dtype=labels.dtype)
     new_stats: List[Dict[str, Any]] = []
     for new_idx, item in enumerate(filtered_stats, start=1):
         old_lbl = item["label"]
-        filtered_labels[labels == old_lbl] = new_idx
+        if 0 < old_lbl <= max_lbl:
+            filter_lut[old_lbl] = new_idx
         item_copy = dict(item)
         item_copy["label"] = new_idx
         new_stats.append(item_copy)
+    filtered_labels = filter_lut[labels]
 
     return filtered_labels, new_stats
 
@@ -563,7 +565,7 @@ def calc_binary_metrics(
     mse = float(np.mean((m1.astype(float) - m2.astype(float)) ** 2))
 
     if mse == 0.0:
-        psnr = float('inf')
+        psnr = 999.0
     else:
         psnr = float(10.0 * np.log10(1.0 / mse))
 
@@ -597,6 +599,8 @@ def benchmark_morphology_vs_opencv(
     Returns:
         Dict chứa các chỉ số đối chứng và thời gian chạy ms của từng phép toán.
     """
+    import cv2
+
     k_scratch = create_structuring_element(shape, kernel_size)
 
     # Tạo kernel tương ứng của OpenCV để đối chứng
@@ -675,6 +679,8 @@ def benchmark_ccl_vs_opencv(
     Returns:
         Dict tổng hợp các chỉ số nghiệm thu.
     """
+    import cv2
+
     # 1. Chạy Scratch
     t0 = time.perf_counter()
     k_sc, labels_sc, stats_sc = 0, None, []

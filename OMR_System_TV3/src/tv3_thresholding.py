@@ -13,7 +13,6 @@ Nguyên tắc: Thuật toán luồng chính cài đặt 100% bằng NumPy thuầ
 
 import time
 import numpy as np
-import cv2
 from typing import Tuple, Dict, Any, Union
 
 
@@ -341,7 +340,9 @@ def benchmark_otsu_vs_opencv(
     """
     if image.ndim != 2:
         raise ValueError(f"Ảnh đầu vào phải là ảnh mức xám 2D, nhận được shape: {image.shape}")
-        
+
+    import cv2
+
     img_gray = np.clip(image, 0, 255).astype(np.uint8)
 
     # 1. Chạy Otsu from Scratch
@@ -394,7 +395,9 @@ def benchmark_adaptive_vs_opencv(
     """
     if image.ndim != 2:
         raise ValueError(f"Ảnh đầu vào phải là ảnh mức xám 2D, nhận được shape: {image.shape}")
-        
+
+    import cv2
+
     img_gray = np.clip(image, 0, 255).astype(np.uint8)
 
     # 1. Chạy Adaptive Thresholding Scratch (Integral Image O(1))
@@ -441,6 +444,8 @@ def benchmark_adaptive_vs_opencv(
 # ==============================================================================
 
 if __name__ == '__main__':
+    import cv2
+
     print("=" * 70)
     print("KIỂM THỬ ĐỘC LẬP MODULE TV3_THRESHOLDING (NHÓM 4 - THÀNH VIÊN 3)")
     print("=" * 70)

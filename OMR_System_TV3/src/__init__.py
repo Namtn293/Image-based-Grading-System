@@ -1,6 +1,6 @@
 """
 DỰ ÁN XỬ LÝ ẢNH (INT13146) - NHÓM 4
-Gói mã nguồn chính (src package)
+Gói mã nguồn chính (tv3 / src package)
 
 Module Thành viên 3:
     - tv3_thresholding: Phân ngưỡng Otsu toàn cục & Adaptive Mean Thresholding
@@ -9,18 +9,8 @@ Module Thành viên 3:
     - tv3_segmentation: Pipeline tích hợp toàn diện và kiểm thử nghiệm thu
 """
 
-import os
-import sys
-
-_current_dir = os.path.dirname(os.path.abspath(__file__))
-_project_root = os.path.abspath(os.path.join(_current_dir, ".."))
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
-if _current_dir not in sys.path:
-    sys.path.insert(0, _current_dir)
-
-try:
-    from src.tv3_thresholding import (
+if __package__:
+    from .tv3_thresholding import (
         compute_histogram_scratch,
         otsu_threshold_scratch,
         compute_integral_image_scratch,
@@ -30,7 +20,7 @@ try:
         benchmark_adaptive_vs_opencv,
     )
 
-    from src.tv3_morphology_ccl import (
+    from .tv3_morphology_ccl import (
         create_structuring_element,
         erode_binary_scratch,
         dilate_binary_scratch,
@@ -45,7 +35,7 @@ try:
         benchmark_ccl_vs_opencv,
     )
 
-    from src.tv3_roi_classifier import (
+    from .tv3_roi_classifier import (
         STATUS_VALID,
         STATUS_BLANK,
         STATUS_ERASED_VALID,
@@ -65,16 +55,19 @@ try:
         recognize_all_questions,
     )
 
-    from src.tv3_segmentation import (
+    from .tv3_segmentation import (
         TV3PipelineConfig,
+        OMRSharedConfig,
         TV3PipelineResult,
         TV3SegmentationPipeline,
         run_tv3_pipeline,
+        detect_bubble_grid_scratch,
         extract_bubble_answers,
+        extract_bubble_answers_with_warnings,
         generate_synthetic_omr_sheet,
         visualize_pipeline_steps,
     )
-except ModuleNotFoundError:
+else:
     from tv3_thresholding import (
         compute_histogram_scratch,
         otsu_threshold_scratch,
@@ -122,10 +115,13 @@ except ModuleNotFoundError:
 
     from tv3_segmentation import (
         TV3PipelineConfig,
+        OMRSharedConfig,
         TV3PipelineResult,
         TV3SegmentationPipeline,
         run_tv3_pipeline,
+        detect_bubble_grid_scratch,
         extract_bubble_answers,
+        extract_bubble_answers_with_warnings,
         generate_synthetic_omr_sheet,
         visualize_pipeline_steps,
     )
@@ -172,10 +168,13 @@ __all__ = [
     "recognize_all_questions",
     # Pipeline & Demo
     "TV3PipelineConfig",
+    "OMRSharedConfig",
     "TV3PipelineResult",
     "TV3SegmentationPipeline",
     "run_tv3_pipeline",
+    "detect_bubble_grid_scratch",
     "extract_bubble_answers",
+    "extract_bubble_answers_with_warnings",
     "generate_synthetic_omr_sheet",
     "visualize_pipeline_steps",
 ]

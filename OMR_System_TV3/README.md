@@ -107,7 +107,7 @@ OMR_System_TV3/
 │   ├── tv3_morphology_ccl.py      # Morphology (Erode, Dilate, Open, Close) & Two-Pass CCL
 │   ├── tv3_roi_classifier.py      # Circular ROI, Fill Ratio tau & 4-State Classifier
 │   └── tv3_segmentation.py        # Pipeline tích hợp, Demo CLI & Adapter cho TV4
-├── tests/                         # Bộ kiểm thử tự động toàn diện (69 Unit Tests)
+├── tests/                         # Bộ kiểm thử tự động toàn diện (77 Unit Tests)
 │   ├── __init__.py
 │   ├── test_tv3_thresholding.py   # Kiểm thử Otsu, Integral Image & Adaptive Mean
 │   ├── test_tv3_morphology_ccl.py # Kiểm thử Structuring Element, Morphology & CCL
@@ -139,11 +139,11 @@ cd OMR_System_TV3
 pip install -r requirements.txt
 ```
 
-### Bước 2: Chạy bộ kiểm thử tự động (69 Unit Tests)
+### Bước 2: Chạy bộ kiểm thử tự động (77 Unit Tests)
 ```powershell
 pytest -v
 ```
-Kết quả kiểm thử đạt **69/69 PASSED (100%)** trong khoảng 35 giây.
+Kết quả kiểm thử đạt **77/77 PASSED (100%)**.
 
 ### Bước 3: Chạy script Demo & Xuất toàn bộ ảnh nghiệm thu
 ```powershell
