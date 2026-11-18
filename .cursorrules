@@ -1,0 +1,21 @@
+# Workspace Engineering & UI/UX Standards
+
+## 1. UI/UX & Academic Presentation Guidelines
+- **Zero Raw Emoji in UI Text**: Absolutely do NOT use raw emojis or text icons (such as 📂, 📤, 🔥, 🚀, 🔍, 🛠️, 🌿, ⚙️, 🎛️, 📑, 🔄, 📥, 📦, 💡, 👉, 🖼️, ℹ️, 🚨, 🚫, 📋, 📍, ✅, 🎲, ⚡, 📈, 📉, etc.) in user-facing labels, selectbox options, buttons, radio buttons, headers, or metric titles.
+- **Academic & Clean SaaS Styling**: Use professional academic Vietnamese typography. Use badges like `[ĐÚNG]`, `[SAI]`, `[LỆCH ĐỀ]`, `[TẨY XÓA Δτ]` and native button/card highlights instead of emoji prefixes.
+- **High Visual Contrast**: Ensure all labels and container borders remain legible with high contrast against light backgrounds.
+
+## 2. Modular Architecture Standard
+- **No God Objects**: Never cram thousands of lines of Streamlit UI into a single `app.py`.
+- **Modular Tab Pattern**: Decompose dashboard views into dedicated modules under `ui/`:
+  - `ui/tab1_grading.py` (Automated grading & human-in-the-loop review)
+  - `ui/tab2_stepper.py` (4-stage pipeline stepper)
+  - `ui/tab3_benchmark.py` (Quantitative verification & ablation studies)
+  - `ui/tab4_statistics.py` (Score distribution & class analytics)
+  - `ui/styles.py` (CSS design system & chart visual helpers)
+- `app.py` should remain an ultra-clean orchestrator (~150-200 lines) easy to explain and defend in oral defense.
+
+## 3. Algorithmic Rigor & Independence
+- **Pure Scratch Isolation**: Pure NumPy "Scratch" algorithms must NEVER call OpenCV processing methods in their primary execution path.
+- **Identical Benchmark Parameters**: Scratch and OpenCV comparative baselines must use identical parameters (block size, C, morphology kernels, inner radius, thresholds) to maintain rigorous evaluation validity.
+- **Memory Buffer Exports**: Use `io.BytesIO()` for file exports (e.g. Excel) to keep git tracked directories clean.

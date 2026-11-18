@@ -9,7 +9,7 @@
 
 ---
 
-## 📌 1. NỘI DUNG KỸ THUẬT VÀ NHIỆM VỤ CỦA THÀNH VIÊN 4
+## 1. NỘI DUNG KỸ THUẬT VÀ NHIỆM VỤ CỦA THÀNH VIÊN 4
 
 Theo đề cương phân công BTL, Thành viên 4 đảm nhiệm các phần việc cốt lõi sau:
 
@@ -22,18 +22,18 @@ Theo đề cương phân công BTL, Thành viên 4 đảm nhiệm các phần vi
    - Đọc và xuất ma trận điểm ảnh mức xám dạng số học $[0 \dots 255]$ ra file `.csv`, phục vụ nghiệm thu chi tiết từng pixel theo yêu cầu của giảng viên tại Slide 10–12.
 4. **Bộ đo đạc đối chứng định lượng (Quantitative Benchmark):**
    - Độc lập chạy các hàm thư viện chuẩn `OpenCV` song song với thuật toán tự cài đặt của cả 4 thành viên.
-   - Tự động tính toán các chỉ số toán học: Sai số toàn phương trung bình (**MSE**), Tỷ số tín hiệu trên nhiễu đỉnh (**PSNR**), Độ tương đồng diện tích (**IoU/Dice**), Độ lệch ngưỡng $\Delta T$, và Thời gian thực thi (Latency).
+   - Tự động tính toán các chỉ số toán học: Sai số toàn phương trung bình (**MSE**), Tỷ số tín hiệu trên nhiễu đỉnh (**PSNR**), Độ tương đồng diện tích (**IoU/Dice**), Độ lệch ngưỡng $\Delta\tau$, và Thời gian thực thi (Latency).
 5. **Logic chấm điểm & Xuất báo cáo Excel chuyên nghiệp:**
    - Thuật toán chấm điểm thang 10, phân loại chính xác các trạng thái: Đúng, Sai, Bỏ trống (Blank) và Phạm quy (Multiple marks).
    - Cơ chế phát hiện tự động cấu trúc số câu trên phiếu để cảnh báo nếu người dùng nạp nhầm phiếu 20 câu với đáp án 10 câu (hoặc ngược lại).
    - Tự động xuất bảng điểm tổng hợp ra file Excel `Ket_Qua_Cham_Thi.xlsx` với 2 sheet có định dạng màu trực quan.
 6. **Điều phối tích hợp hệ thống & Giao diện Web tương tác:**
    - Xây dựng luồng điều phối tích hợp (`pipeline_coordinator.py`) kết nối trơn tru 4 phân hệ.
-   - Xây dựng bảng điều khiển Web đa năng bằng Streamlit (`app.py`) phục vụ bảo vệ đồ án.
+   - Xây dựng bảng điều khiển Web đa năng bằng Streamlit (`app.py` và gói `ui/`) phục vụ bảo vệ đồ án.
 
 ---
 
-## 📐 2. CƠ SỞ TOÁN HỌC CÁC THUẬT TOÁN TỰ CÀI ĐẶT
+## 2. CƠ SỞ TOÁN HỌC CÁC THUẬT TOÁN TỰ CÀI ĐẶT
 
 ### 2.1. Cân bằng lược đồ mức xám (Histogram Equalization)
 Cho ảnh mức xám $I \in [0, L-1]$ kích thước $M \times N$ (với $L = 256$):
@@ -60,14 +60,16 @@ Với cửa sổ lân cận kích thước $k \times k$ (với $k = 2r + 1$):
   $$\text{PSNR} = 10 \cdot \log_{10}\left( \frac{255^2}{\text{MSE}} \right) \quad (\text{dB})$$
 * **Chỉ số tương đồng vùng nhị phân (Intersection over Union - IoU):**
   $$\text{IoU} = \frac{|A \cap B|}{|A \cup B|} = \frac{\sum (A \land B)}{\sum (A \lor B)}$$
+* **Độ lệch ngưỡng Otsu ($\Delta\tau$):**
+  $$\Delta\tau = |\tau_{\text{scratch}} - \tau_{\text{OpenCV}}|$$
 
 ---
 
-## 📂 3. CẤU TRÚC THƯ MỤC PHÂN HỆ 4
+## 3. CẤU TRÚC THƯ MỤC PHÂN HỆ 4
 
 ```
 OMR_System_TV4/
-├── app.py                      # Ứng dụng Web Streamlit 4 Tab hoàn chỉnh
+├── app.py                      # Ứng dụng Web Streamlit (Controller & Layout Router)
 ├── run_demo.py                 # Script CLI kiểm thử & in bảng số liệu đối chứng
 ├── generate_samples.py         # Script sinh bộ dữ liệu mẫu (DS-01 .. DS-05 & CSV)
 ├── requirements.txt            # Danh sách thư viện phụ thuộc của dự án
@@ -78,10 +80,20 @@ OMR_System_TV4/
 │   ├── sample_matrix_15x15.csv # File ma trận mức xám 15x15 có nhiễu muối tiêu
 │   ├── Ket_Qua_Cham_Thi.xlsx   # File Excel kết quả chấm bài thi tổng hợp
 │   └── samples/                # Bộ 5 ảnh phiếu thi trắc nghiệm mẫu (DS-01 .. DS-05)
-├── src/                        # Thư mục mã nguồn chính của Module 4
-│   ├── __init__.py
-│   ├── tv4_enhancement_eval.py # Module 4: Tăng cường ảnh, Chấm điểm, Benchmark & Excel
-│   └── pipeline_coordinator.py # Luồng điều phối tích hợp toàn hệ thống
+├── src/                        # Thư mục mã nguồn thuật toán (Modular Architecture)
+│   ├── __init__.py             # Package init & re-export
+│   ├── tv4_filters.py          # Thuật toán Scratch: Median Filter & Histogram Equalization
+│   ├── tv4_metrics.py          # Bộ đo đạc định lượng: MSE, PSNR, IoU, Dice, Delta-tau, Ablation
+│   ├── tv4_grader.py           # Logic chấm điểm OMR, Ma trận CSV & Xuất báo cáo Excel
+│   ├── tv4_enhancement_eval.py # Facade module (Đảm bảo tương thích ngược 100%)
+│   └── pipeline_coordinator.py # Luồng điều phối tích hợp toàn hệ thống (TV1 -> TV4)
+├── ui/                         # Giao diện Web Modular (Zero Raw Emojis, Pure Light SaaS)
+│   ├── __init__.py             # Package UI init
+│   ├── styles.py               # Hệ thống CSS Light SaaS & cấu hình Matplotlib
+│   ├── tab1_grading.py         # Tab 1: Chấm bài trắc nghiệm & Giám sát Human-in-the-Loop
+│   ├── tab2_stepper.py         # Tab 2: Stepper kiểm thử từng bước Pipeline liên hoàn
+│   ├── tab3_benchmark.py       # Tab 3: Đối chứng Triplet View & Khảo sát Ablation
+│   └── tab4_statistics.py      # Tab 4: Thống kê KPI, biểu đồ phổ điểm & tỷ lệ làm đúng
 └── tests/                      # Bộ kiểm thử tự động của Module 4
     ├── __init__.py
     └── test_tv4_algorithms.py  # 20 Unit Tests kiểm thử toàn diện
@@ -89,7 +101,7 @@ OMR_System_TV4/
 
 ---
 
-## 🚀 4. HƯỚNG DẪN CÀI ĐẶT & SỬ DỤNG
+## 4. HƯỚNG DẪN CÀI ĐẶT & SỬ DỤNG
 
 ### Bước 1: Cài đặt môi trường
 ```powershell
@@ -98,7 +110,7 @@ pip install -r requirements.txt
 
 ### Bước 2: Chạy bộ kiểm thử tự động (20 Unit Tests)
 ```powershell
-python -m unittest discover tests -v
+python -m unittest discover -s tests -v
 ```
 Toàn bộ 20 bài kiểm thử bao phủ toàn diện:
 - Tính đúng đắn toán học của Cân bằng sáng CDF và Lọc trung vị.
