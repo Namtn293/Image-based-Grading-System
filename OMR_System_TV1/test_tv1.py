@@ -24,11 +24,13 @@ from tv1_preprocessing import (
     gaussian_blur_scratch,
     canny_edge_scratch,
     hough_lines_standard,
+    apply_parameter_space_nms,
     detect_sheet_corners,
     process_preprocessing_pipeline,
     calculate_mse,
     calculate_psnr,
-    calculate_binary_iou_dice
+    calculate_binary_iou_dice,
+    calculate_line_match_rate,
 )
 
 
@@ -38,7 +40,8 @@ def run_all_tv1_tests():
     print("#" * 68 + "\n")
 
     base_dir = Path(__file__).resolve().parent.parent
-    sample_p = base_dir / "OMR_System_TV4" / "data" / "samples" / "01_B21DCCN001_Chuan.png"
+    samples_dir = base_dir / "OMR_System_TV4" / "data" / "samples"
+    sample_p = samples_dir / "01_B21DCCN001_Chuan.png"
 
     if sample_p.exists():
         real_img = cv2.imread(str(sample_p))
@@ -127,15 +130,25 @@ def run_all_tv1_tests():
     t_sc = (time.perf_counter() - t0) * 1000.0
 
     t0 = time.perf_counter()
-    lines_cv = cv2.HoughLines(canny_cv, 1.0, np.pi / 180.0, 100)
+    lines_cv_raw = cv2.HoughLines(canny_cv, 1.0, np.pi / 180.0, 100)
     t_cv = (time.perf_counter() - t0) * 1000.0
 
-    n_sc = len(lines_sc)
-    n_cv = len(lines_cv) if lines_cv is not None else 0
+    lines_cv = (
+        [(float(l[0][0]), float(l[0][1])) for l in lines_cv_raw]
+        if lines_cv_raw is not None else []
+    )
+    lines_cv_nms = apply_parameter_space_nms(lines_cv)
+    recall = calculate_line_match_rate(lines_cv_nms, lines_sc)
+    precision = calculate_line_match_rate(lines_sc, lines_cv_nms)
+
     print(f"  Kích thước Accumulator: {acc.shape}")
-    print(f"  Số đường thẳng tìm thấy: Scratch = {n_sc} đường | OpenCV = {n_cv} đường")
+    print(f"  Số đường thẳng: Scratch = {len(lines_sc)} | OpenCV = {len(lines_cv)} (sau NMS: {len(lines_cv_nms)})")
+    print(f"  Recall    = {recall * 100:.1f}% (Tiêu chuẩn: >= 95%)")
+    print(f"  Precision = {precision * 100:.1f}% (Tiêu chuẩn: >= 90%)")
     print(f"  Thời gian: Scratch = {t_sc:.2f} ms | OpenCV = {t_cv:.2f} ms")
-    print("  --> [PASS] Biến đổi Hough cực hoạt động chính xác và ổn định!")
+    assert recall >= 0.95, f"Recall Hough quá thấp: {recall*100:.1f}%"
+    assert precision >= 0.90, f"Precision Hough quá thấp: {precision*100:.1f}%"
+    print("  --> [PASS] Biến đổi Hough cực khớp tập đường chính của OpenCV!")
 
     # ============================================================
     # 5. KIỂM THỬ: Định vị 4 đỉnh góc phiếu thi (detect_sheet_corners)
@@ -146,19 +159,39 @@ def run_all_tv1_tests():
     c_std_cv = detect_sheet_corners(real_img, use_scratch=False)
     err_std = float(np.mean(np.linalg.norm(c_std_sc - c_std_cv, axis=1)))
     print(f"  [DS-01 Ảnh chuẩn] Sai số góc trung bình: {err_std:.2f} px")
+    print(f"    Góc (Scratch): {c_std_sc.tolist()}")
 
-    p2_path = base_dir / "OMR_System_TV4" / "data" / "samples" / "02_B21DCCN002_Nghieng_BanToi.png"
+    p2_path = samples_dir / "02_B21DCCN002_Nghieng_BanToi.png"
     if p2_path.exists():
         tilted_img = cv2.imread(str(p2_path))
         c_tilt_sc = detect_sheet_corners(tilted_img, use_scratch=True)
         c_tilt_cv = detect_sheet_corners(tilted_img, use_scratch=False)
         err_tilt = float(np.mean(np.linalg.norm(c_tilt_sc - c_tilt_cv, axis=1)))
         print(f"  [DS-02 Ảnh nghiêng bàn tối] Sai số góc trung bình: {err_tilt:.2f} px")
-        print(f"    Góc tìm được (Scratch):\\n{c_tilt_sc}")
-        print(f"    Góc đối chứng (OpenCV):\\n{c_tilt_cv}")
+        print(f"    Góc tìm được (Scratch): {c_tilt_sc.tolist()}")
+        print(f"    Góc đối chứng (OpenCV): {c_tilt_cv.tolist()}")
         assert err_tilt <= 15.0, "Sai số góc vượt quá ngưỡng cho phép!"
 
+        # DS-02 phải được dò bằng Canny + Hough (tứ giác co vào trong ảnh)
+        h_t, w_t = tilted_img.shape[:2]
+        xs, ys = c_tilt_sc[:, 0], c_tilt_sc[:, 1]
+        assert xs.min() > 10 and ys.min() > 10 and xs.max() < w_t - 10 and ys.max() < h_t - 10, \
+            "DS-02 phải trả về tứ giác nằm trong ảnh, không trùng mép khung hình!"
+        print("  --> [PASS] Nhánh Canny + Hough hoạt động đúng trên ảnh nghiêng!")
+
     print("  --> [PASS] Định vị 4 góc phiếu thi chính xác và bền vững!")
+
+    # DS-05: bóng đổ một phía không được làm phiếu bị "thụt" vào trong khung hình
+    p5_path = samples_dir / "05_B21DCCN005_BongDo_ChieuSangKhongDeu.png"
+    if p5_path.exists():
+        shadow_img = cv2.imread(str(p5_path))
+        c_sh_sc = detect_sheet_corners(shadow_img, use_scratch=True)
+        c_sh_cv = detect_sheet_corners(shadow_img, use_scratch=False)
+        err_sh = float(np.mean(np.linalg.norm(c_sh_sc - c_sh_cv, axis=1)))
+        print(f"  [DS-05 Bóng đổ không đều] Sai số góc trung bình: {err_sh:.2f} px")
+        print(f"    Góc (Scratch): {np.round(c_sh_sc, 1).tolist()}")
+        assert err_sh <= 3.0, "Bóng đổ không được đẩy phiếu sang nhánh nền bàn tối!"
+        print("  --> [PASS] Bóng đổ một phía không bị nhầm thành nền bàn tối!")
 
     # ============================================================
     # 6. KIỂM THỬ: Full Pipeline Stage 1
@@ -172,10 +205,11 @@ def run_all_tv1_tests():
     print(f"  Shape ảnh xám: {p_res['gray'].shape}")
     print(f"  Shape ảnh biên: {p_res['edges'].shape}")
     print(f"  Tọa độ 4 góc: {p_res['corners'].tolist()}")
+    assert p_res["latencies"]["total_tv1_ms"] < 600.0, "TV1 phải chạy dưới 600 ms/phiếu!"
     print("  --> [PASS] Toàn bộ Pipeline Giai đoạn 1 vận hành mượt mà!")
 
     print("\n" + "=" * 68)
-    print("🎉 TẤT CẢ 6 BÀI KIỂM THỬ MODULE THÀNH VIÊN 1 ĐỀU ĐẠT CHUẨN XUẤT SẮC!")
+    print("TẤT CẢ 6 BÀI KIỂM THỬ MODULE THÀNH VIÊN 1 ĐỀU ĐẠT CHUẨN!")
     print("=" * 68 + "\n")
 
 

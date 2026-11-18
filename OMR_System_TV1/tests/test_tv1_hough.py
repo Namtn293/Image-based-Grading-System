@@ -18,6 +18,12 @@ from tv1_hough import (
     order_quad_corners,
     convex_hull_2d,
     ramer_douglas_peucker,
+    simplify_closed_polygon,
+    apply_parameter_space_nms,
+    otsu_threshold_scratch,
+    collect_boundary_extremes,
+    score_lines_by_edge_support,
+    detect_quad_from_hough_lines,
     detect_quad_from_boundary_scratch
 )
 
@@ -101,6 +107,95 @@ class TestTV1Hough(unittest.TestCase):
         simplified = ramer_douglas_peucker(pts, epsilon=2.0)
         # Sau khi rút gọn với epsilon=2.0, chỉ còn 2 điểm đầu và cuối
         self.assertEqual(len(simplified), 2, "RDP phải rút gọn đường thẳng gần như thẳng về 2 đầu mút.")
+
+    def test_rdp_rejects_closed_polygon(self):
+        """Hồi quy Code Review mục 2.2: RDP không được nhận đa giác khép kín.
+
+        Trước khi sửa, code đưa đa giác khép kín (điểm đầu trùng điểm cuối) vào RDP nên
+        "đoạn thẳng" tham chiếu suy biến thành 1 điểm, khoảng cách luôn bằng 0 và hàm
+        luôn trả về 2 điểm -> nhánh RDP trong detect_quad_from_boundary_scratch
+        không bao giờ chạy được (thực tế luôn rơi xuống nhánh dự phòng 4 điểm cực trị).
+        """
+        closed_square = np.array([
+            [0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0], [0.0, 0.0]
+        ])
+
+        with self.assertRaises(ValueError):
+            ramer_douglas_peucker(closed_square, epsilon=1.0)
+
+    def test_simplify_closed_polygon_keeps_four_corners(self):
+        """RDP trên đa giác khép kín phải giữ đúng 4 đỉnh của hình vuông."""
+        # Hình vuông có thêm nhiều điểm nằm trên cạnh (giả lập điểm biên dày đặc)
+        t = np.linspace(0.0, 1.0, 12)
+        bottom = np.column_stack([t * 100.0, np.zeros_like(t)])
+        right = np.column_stack([np.full_like(t, 100.0), t * 100.0])
+        top = np.column_stack([(1.0 - t) * 100.0, np.full_like(t, 100.0)])
+        left = np.column_stack([np.zeros_like(t), (1.0 - t) * 100.0])
+        polygon = np.vstack([bottom, right, top, left])
+
+        simplified = simplify_closed_polygon(polygon, epsilon=2.0)
+        ordered = order_quad_corners(simplified[:4]) if len(simplified) >= 4 else simplified
+
+        self.assertEqual(len(simplified), 4, f"Phải rút gọn còn đúng 4 đỉnh, nhận được {len(simplified)}")
+        np.testing.assert_allclose(
+            np.sort(ordered, axis=0),
+            np.sort(np.array([[0, 0], [100, 0], [100, 100], [0, 100]], dtype=np.float32), axis=0),
+            atol=1e-4
+        )
+
+    def test_collect_boundary_extremes_keeps_corners(self):
+        """Lấy mẫu biên cực trị theo hàng/cột phải chứa đúng 4 đỉnh của tứ giác."""
+        mask = np.zeros((60, 80), dtype=np.uint8)
+        mask[5:55, 9:71] = 255
+
+        pts = collect_boundary_extremes(mask)
+
+        self.assertGreaterEqual(len(pts), 4)
+        self.assertEqual(pts[:, 0].min(), 9.0, "Phải giữ được cạnh trái x=9")
+        self.assertEqual(pts[:, 0].max(), 70.0, "Phải giữ được cạnh phải x=70")
+        self.assertEqual(pts[:, 1].min(), 5.0, "Phải giữ được cạnh trên y=5")
+        self.assertEqual(pts[:, 1].max(), 54.0, "Phải giữ được cạnh dưới y=54")
+
+    def test_otsu_threshold_matches_opencv(self):
+        """Ngưỡng Otsu tự cài đặt phải khớp cv2.threshold(THRESH_OTSU)."""
+        rng = np.random.default_rng(7)
+        img = np.concatenate([
+            rng.integers(10, 90, size=4000),
+            rng.integers(170, 250, size=6000),
+        ]).astype(np.uint8).reshape(100, 100)
+
+        t_sc = otsu_threshold_scratch(img)
+        t_cv, _ = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        self.assertLessEqual(abs(t_sc - int(t_cv)), 1, f"Ngưỡng Otsu lệch quá 1 mức xám: {t_sc} vs {t_cv}")
+
+    def test_detect_quad_from_hough_lines_rectangle(self):
+        """Hough + Cramer phải dựng đúng 4 góc của khung chữ nhật dày."""
+        edge_img = np.zeros((300, 250), dtype=np.uint8)
+        # Khung chữ nhật dày 3 px để Canny/Hough có đủ điểm biên
+        edge_img[40:44, 30:221] = 255
+        edge_img[256:260, 30:221] = 255
+        edge_img[40:260, 30:34] = 255
+        edge_img[40:260, 217:221] = 255
+
+        lines, _ = hough_lines_standard(edge_img, rho_res=1.0, theta_res=np.pi / 180.0, threshold=100)
+        quad = detect_quad_from_hough_lines(lines, edge_img, edge_img.shape)
+
+        self.assertIsNotNone(quad, "Phải dựng được tứ giác từ 4 cạnh mạnh nhất")
+        expected = np.array([[32.0, 42.0], [219.0, 42.0], [219.0, 258.0], [32.0, 258.0]], dtype=np.float32)
+        err = float(np.mean(np.linalg.norm(quad - expected, axis=1)))
+        self.assertLess(err, 6.0, f"Sai số góc quá lớn: {err:.2f} px, quad={quad.tolist()}")
+
+    def test_apply_parameter_space_nms_merges_duplicates(self):
+        """NMS tham số phải gộp các đường gần trùng và giữ đường mạnh nhất."""
+        lines = [
+            (100.0, np.pi / 2),
+            (102.0, np.pi / 2 + np.deg2rad(1.0)),   # gần trùng -> bị gộp
+            (300.0, 0.0),                            # khác hẳn -> giữ
+        ]
+        kept = apply_parameter_space_nms(lines)
+        self.assertEqual(len(kept), 2, f"Phải gộp còn 2 đường, nhận được {len(kept)}")
+        self.assertAlmostEqual(kept[0][0], 100.0, places=3)
 
 
 if __name__ == "__main__":

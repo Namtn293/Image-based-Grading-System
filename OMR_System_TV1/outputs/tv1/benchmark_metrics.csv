@@ -1,6 +1,6 @@
 module,algorithm,mse,psnr_db,iou,dice,error_metric,time_scratch_ms,time_opencv_ms,status
-TV1,Grayscale Luminance (BT.601),0.0,999.0,,,Max Diff: 0,20.408,2.431,PASS
-TV1,"Gaussian Blur 2D (5x5, sigma=1.4)",0.0072,69.54,,,Max Diff: 1,39.494,0.659,PASS
-TV1,Canny Edge Detector (4 bước),23.0839,34.5,0.9902,0.9951,IoU: 99.02%,241.413,2.027,PASS
-TV1,"Hough Lines Standard (rho=1, theta=1°)",0.0,999.0,,,"Lines found: Scratch=34, CV=79",157.934,7.4,PASS
-TV1,Sheet Corner Localization (4 góc),0.0,999.0,,,Corner Dist: 0.00 px,21.47,0.274,PASS
+TV1,Grayscale Luminance (BT.601),0.0,999.0,,,Max Diff: 0,19.005,2.707,PASS
+TV1,"Gaussian Blur 2D (5x5, sigma=1.4)",0.0072,69.54,,,Max Diff: 1,40.104,0.648,PASS
+TV1,Canny Edge Detector (4 bước),23.0839,34.5,0.9902,0.9951,IoU: 99.02%,67.837,2.73,PASS
+TV1,"Hough Lines Standard (rho=1, theta=1°)",,,1.0,0.9118,"Recall=100.0% / Precision=91.2% (Scratch=34, CV NMS=31)",139.572,6.227,PASS
+TV1,Sheet Corner Localization (4 góc),,,,,Corner Dist: 0.00 px,43.87,4.587,PASS

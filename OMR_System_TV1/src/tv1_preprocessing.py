@@ -56,6 +56,12 @@ try:
         order_quad_corners,
         convex_hull_2d,
         ramer_douglas_peucker,
+        simplify_closed_polygon,
+        collect_boundary_extremes,
+        otsu_threshold_scratch,
+        apply_parameter_space_nms,
+        score_lines_by_edge_support,
+        detect_quad_from_hough_lines,
         detect_quad_from_boundary_scratch
     )
 except ImportError:
@@ -82,13 +88,116 @@ except ImportError:
         order_quad_corners,
         convex_hull_2d,
         ramer_douglas_peucker,
+        simplify_closed_polygon,
+        collect_boundary_extremes,
+        otsu_threshold_scratch,
+        apply_parameter_space_nms,
+        score_lines_by_edge_support,
+        detect_quad_from_hough_lines,
         detect_quad_from_boundary_scratch
     )
 
 
+def _border_band_stats(gray: np.ndarray, band_ratio: float = 0.02) -> Dict[str, float]:
+    """Đo mức xám của các dải viền ảnh để nhận biết phiếu có bị nền bàn tối bao quanh.
+
+    Code cũ chỉ lấy ĐÚNG 4 pixel ở 4 góc ảnh rồi so với ngưỡng cố định 100. Như vậy một
+    vệt bóng, một hạt nhiễu, hay một góc bị cắt lệch là chọn sai nhánh xử lý. Ở đây ta
+    lấy trung vị của cả 4 dải viền (mỗi dải rộng ``band_ratio * min(H, W)`` pixel), nên
+    kết quả ổn định với nhiễu cục bộ, và dùng ngưỡng Otsu thay cho hằng số 100.
+
+    Args:
+        gray: Ảnh mức xám 2D.
+        band_ratio: Độ rộng dải viền theo tỉ lệ cạnh ngắn của ảnh.
+
+    Returns:
+        Dict gồm ``median`` (trung vị toàn bộ dải viền), ``top``, ``bottom``, ``left``,
+        ``right`` (trung vị từng dải), ``interior`` (trung vị vùng giữa ảnh) và
+        ``otsu`` (ngưỡng Otsu toàn ảnh).
+    """
+    h, w = gray.shape[:2]
+    band = max(4, int(round(min(h, w) * band_ratio)))
+
+    strips = {
+        "top": gray[:band, :].ravel(),
+        "bottom": gray[h - band:, :].ravel(),
+        "left": gray[:, :band].ravel(),
+        "right": gray[:, w - band:].ravel(),
+    }
+    all_strips = np.concatenate(list(strips.values()))
+
+    stats: Dict[str, float] = {name: float(np.median(values)) for name, values in strips.items()}
+    stats["median"] = float(np.median(all_strips))
+
+    # Vùng giữa ảnh (50% kích thước) đại diện cho thân tờ phiếu
+    y0, y1 = h // 4, max(h // 4 + 1, 3 * h // 4)
+    x0, x1 = w // 4, max(w // 4 + 1, 3 * w // 4)
+    stats["interior"] = float(np.median(gray[y0:y1, x0:x1]))
+
+    stats["otsu"] = float(otsu_threshold_scratch(gray))
+    return stats
+
+
+def _is_sheet_surrounded_by_dark_desk(gray: np.ndarray) -> bool:
+    """Quyết định ảnh có nền bàn tối **bao quanh** phiếu hay không (dải viền + Otsu).
+
+    Ba tiêu chí độc lập, chỉ cần một tiêu chí đúng là kết luận "có nền tối":
+
+      1. **Cả bốn** dải viền đều tối hơn ngưỡng Otsu ít nhất 20 mức xám.
+      2. **Mỗi** dải viền có từ 60% pixel trở lên thuộc lớp tối của Otsu (``<= T*``).
+      3. **Cạnh sáng nhất** trong bốn dải viền vẫn nhỏ hơn 60% trung vị vùng giữa ảnh.
+
+    Vì sao phải xét riêng từng phía thay vì gộp cả bốn dải làm một trung vị: nền bàn tối
+    thật sự bao quanh phiếu nên **mọi phía** đều tối (DS-02: cả 4 dải ≈ 45 trong khi vùng
+    giữa ≈ 245). Ngược lại, ảnh DS-05 là tờ phiếu phủ kín khung hình chỉ bị **bóng đổ** ở
+    phía dưới: dải trên vẫn sáng 245, ba dải còn lại tối 80. Nếu gộp chung, trung vị rơi
+    vào vùng tối (80) và dải sáng bị "bỏ phiếu thiểu số", khiến tờ phiếu bị cắt thành một
+    tứ giác thụt vào trong — sai 67 px so với baseline. Yêu cầu cả bốn phía cùng tối loại
+    đúng trường hợp bóng đổ này mà vẫn nhận đúng DS-02.
+
+    Ba tiêu chí đều dựa trên trung vị và tỉ lệ của **toàn bộ** dải viền (không phải 4 pixel
+    góc), nên một vệt bóng hay hạt nhiễu cục bộ không đánh lừa được bộ phân loại.
+
+    Args:
+        gray: Ảnh mức xám 2D.
+
+    Returns:
+        True nếu ảnh có nền tối bao quanh phiếu.
+    """
+    stats = _border_band_stats(gray)
+    threshold = stats["otsu"]
+    side_medians = (stats["top"], stats["bottom"], stats["left"], stats["right"])
+    brightest_side = max(side_medians)
+
+    # Tiêu chí 1: CẢ BỐN phía đều tối hơn ngưỡng Otsu đáng kể (nền bao quanh thật sự)
+    if brightest_side < threshold - 20.0:
+        return True
+
+    # Tiêu chí 2: MỖI dải viền đều có >= 60% pixel thuộc lớp tối của Otsu
+    h, w = gray.shape[:2]
+    band = max(4, int(round(min(h, w) * 0.02)))
+    side_strips = (
+        gray[:band, :].ravel(),
+        gray[h - band:, :].ravel(),
+        gray[:, :band].ravel(),
+        gray[:, w - band:].ravel(),
+    )
+    if all(float(np.mean(strip <= threshold)) >= 0.60 for strip in side_strips):
+        return True
+
+    # Tiêu chí 3: phía sáng nhất vẫn tối hơn hẳn vùng giữa ảnh
+    interior = stats["interior"]
+    if interior > 1.0 and brightest_side < 0.60 * interior:
+        return True
+
+    return False
+
+
 def detect_sheet_corners(
     image: np.ndarray,
-    use_scratch: bool = True
+    use_scratch: bool = True,
+    precomputed_gray: Optional[np.ndarray] = None,
+    precomputed_edges: Optional[np.ndarray] = None
 ) -> np.ndarray:
     """Xác định tọa độ 4 góc của tờ phiếu trả lời trắc nghiệm (Sheet Corner Detection).
 
@@ -96,17 +205,29 @@ def detect_sheet_corners(
       - Trả về mảng numpy shape (4, 2) theo đúng thứ tự [Top-Left, Top-Right, Bottom-Right, Bottom-Left].
       - Tương thích 100% với hàm order_corners() và warp_perspective_sheet() của Thành viên 2 (TV2).
 
-    Xử lý các tình huống chụp thực tế:
-      1. Phiếu chuẩn đã cắt sát viền hoặc chiếm toàn bộ ảnh (DS-01, DS-03, DS-04, DS-05):
-         Tọa độ 4 đỉnh là 4 góc của toàn khung hình: [[0, 0], [W-1, 0], [W-1, H-1], [0, H-1]].
-      2. Phiếu chụp nghiêng trên mặt bàn tối màu (DS-02):
-         Phân đoạn vùng giấy trắng khỏi mặt bàn tối bằng phân ngưỡng & Canny,
-         tìm tứ giác bao ngoài của tờ phiếu bằng Bao lồi Monotone Chain + Xấp xỉ RDP hoặc Hough Lines.
+    Hai kịch bản thực tế:
+
+    1. **Phiếu chiếm toàn khung ảnh** (DS-01, DS-03, DS-04, DS-05):
+       Nền ảnh chính là giấy nên mép phiếu trùng mép ảnh. Khi đó trả về 4 góc khung hình.
+
+    2. **Phiếu nằm trên nền bàn tối** (DS-02):
+       Chạy đầy đủ chuỗi Canny -> Hough -> giao điểm Cramer:
+         a. Làm mịn Gaussian và phát hiện biên Canny (4 bước, thuần NumPy).
+         b. Biến đổi Hough cực để lấy các đường thẳng mạnh.
+         c. Chấm điểm từng đường bằng số điểm biên thật sự nằm trên nó.
+         d. Tách họ cạnh dọc / cạnh ngang, chọn 2 cạnh đối diện mạnh nhất mỗi họ.
+         e. Tính 4 giao điểm bằng :func:`intersect_lines_polar` (quy tắc Cramer).
+       Nếu Hough không dựng được tứ giác hợp lệ, dự phòng bằng phân ngưỡng Otsu +
+       bao lồi Andrew's Monotone Chain + xấp xỉ đa giác RDP.
 
     Args:
         image: Ảnh đầu vào 2D (mức xám) hoặc 3D (màu BGR/RGB).
         use_scratch: True = sử dụng 100% thuật toán Scratch của TV1;
                      False = sử dụng OpenCV baseline làm đối chứng.
+        precomputed_gray: Ảnh mức xám đã tính sẵn (tránh chuyển đổi lặp lại khi gọi từ
+                     :func:`process_preprocessing_pipeline`).
+        precomputed_edges: Ảnh biên Canny đã tính sẵn trên ``precomputed_gray`` (tránh
+                     chạy lại Canny lần thứ hai trong cùng một pipeline).
 
     Returns:
         corners: Mảng float32 shape (4, 2) theo thứ tự [TL, TR, BR, BL].
@@ -115,50 +236,52 @@ def detect_sheet_corners(
     h, w = img.shape[:2]
 
     # Chuẩn hóa về ảnh mức xám
-    if img.ndim == 3 and img.shape[2] >= 3:
+    if precomputed_gray is not None:
+        gray = np.asarray(precomputed_gray)
+    elif img.ndim == 3 and img.shape[2] >= 3:
         gray = rgb_to_gray_scratch(img, is_bgr=True) if use_scratch else _cv_rgb_to_gray(img)
     elif img.ndim == 3 and img.shape[2] == 1:
         gray = img[:, :, 0]
     else:
         gray = img.copy()
 
-    # Kiểm tra mức xám trung bình 4 góc ảnh xem có phải mặt bàn tối bao quanh không
-    corner_vals = [
-        float(gray[0, 0]),
-        float(gray[0, w - 1]),
-        float(gray[h - 1, 0]),
-        float(gray[h - 1, w - 1])
-    ]
-    is_surrounded_by_dark_desk = (np.mean(corner_vals) < 120.0)
+    full_frame = np.array([
+        [0.0, 0.0],
+        [float(w - 1), 0.0],
+        [float(w - 1), float(h - 1)],
+        [0.0, float(h - 1)]
+    ], dtype=np.float32)
 
-    if not is_surrounded_by_dark_desk:
-        # Tờ phiếu đã chiếm toàn bộ khung ảnh
-        return np.array([
-            [0.0, 0.0],
-            [float(w - 1), 0.0],
-            [float(w - 1), float(h - 1)],
-            [0.0, float(h - 1)]
-        ], dtype=np.float32)
+    if not use_scratch:
+        return _detect_sheet_corners_cv(img)
 
-    # Trường hợp phiếu đặt trên mặt bàn tối (DS-02 Perspective Tilt)
-    if use_scratch:
-        # Phân ngưỡng tách nền bàn
-        binary = (gray >= 100).astype(np.uint8) * 255
-        quad = detect_quad_from_boundary_scratch(binary, (h, w))
-        if quad is not None:
-            return quad.astype(np.float32)
+    # Nhánh 1: phiếu chiếm toàn khung ảnh -> 4 góc khung hình
+    if not _is_sheet_surrounded_by_dark_desk(gray):
+        return full_frame
 
-        # Nếu không tìm thấy tứ giác hợp lệ, fallback về 4 góc ảnh
-        return np.array([
-            [0.0, 0.0],
-            [float(w - 1), 0.0],
-            [float(w - 1), float(h - 1)],
-            [0.0, float(h - 1)]
-        ], dtype=np.float32)
+    # Nhánh 2: phiếu trên nền bàn tối -> Canny + Hough + giao điểm Cramer
+    if precomputed_edges is not None:
+        edges = np.asarray(precomputed_edges)
     else:
-        # OpenCV Baseline để so sánh đối chứng
-        return _detect_sheet_corners_cv(image)
+        blurred = gaussian_blur_scratch(gray, kernel_size=5, sigma=1.4)
+        edges = canny_edge_detector(blurred, low_threshold=50.0, high_threshold=150.0, preblurred=True)
+    lines, _ = hough_lines_standard(
+        edges, rho_res=1.0, theta_res=np.pi / 180.0, threshold=80
+    )
 
+    quad = detect_quad_from_hough_lines(lines, edges, (h, w))
+    if quad is not None:
+        return quad.astype(np.float32)
+
+    # Dự phòng: phân ngưỡng Otsu + bao lồi + RDP trên đa giác khép kín
+    threshold = otsu_threshold_scratch(gray)
+    binary = ((gray > threshold).astype(np.uint8)) * 255
+    quad = detect_quad_from_boundary_scratch(binary, (h, w))
+    if quad is not None:
+        return quad.astype(np.float32)
+
+    # Không tìm thấy tứ giác hợp lệ, fallback về 4 góc ảnh
+    return full_frame
 
 def _cv_rgb_to_gray(image: np.ndarray) -> np.ndarray:
     """Hàm phụ trợ gọi OpenCV chuyển mức xám (chỉ dùng trong chế độ đối chứng)."""
@@ -272,9 +395,14 @@ def process_preprocessing_pipeline(
         edges = cv2.Canny(blurred, int(canny_low), int(canny_high), L2gradient=True)
     latencies["canny_edge_ms"] = round((time.perf_counter() - t0) * 1000.0, 3)
 
-    # 4. Xác định 4 góc phiếu
+    # 4. Xác định 4 góc phiếu (dùng lại gray + edges đã tính, không chạy lại Canny)
     t0 = time.perf_counter()
-    corners = detect_sheet_corners(image, use_scratch=use_scratch)
+    corners = detect_sheet_corners(
+        image,
+        use_scratch=use_scratch,
+        precomputed_gray=gray,
+        precomputed_edges=edges
+    )
     latencies["corner_detection_ms"] = round((time.perf_counter() - t0) * 1000.0, 3)
 
     latencies["total_tv1_ms"] = round((time.perf_counter() - t_start) * 1000.0, 3)
@@ -310,6 +438,67 @@ def calculate_binary_iou_dice(bin1: np.ndarray, bin2: np.ndarray) -> Tuple[float
     iou = (inter / union) if union > 0 else 1.0
     dice = (2.0 * inter / (int(b1.sum()) + int(b2.sum()))) if (int(b1.sum()) + int(b2.sum())) > 0 else 1.0
     return round(float(iou), 4), round(float(dice), 4)
+
+
+def calculate_line_match_rate(
+    lines_reference: List[Tuple[float, float]],
+    lines_test: List[Tuple[float, float]],
+    theta_tolerance: float = np.deg2rad(2.0),
+    rho_tolerance: float = 5.0,
+    canonical: bool = True
+) -> float:
+    """Đo tỉ lệ đường thẳng trong ``lines_reference`` được ``lines_test`` tìm lại được.
+
+    So sánh trực tiếp SỐ LƯỢNG đường (cách làm cũ trong benchmark) không phản ánh đúng
+    chất lượng: OpenCV trả về rất nhiều cực đại phụ nên số lượng luôn lệch, trong khi tập
+    đường chính lại trùng nhau. Hàm này so khớp theo tham số hình học:
+
+      - Hai đường được coi là trùng nếu ``|Δθ| <= theta_tolerance`` và
+        ``|Δρ| <= rho_tolerance``.
+      - Góc được chuẩn hóa về ``[0, π)`` theo quy ước Hesse ``ρ = x·cosθ + y·sinθ`` để
+        ``(ρ, θ)`` và ``(-ρ, θ + π)`` biểu diễn cùng một đường.
+
+    Args:
+        lines_reference: Danh sách (rho, theta) làm chuẩn (thường là kết quả OpenCV).
+        lines_test: Danh sách (rho, theta) cần kiểm tra (thường là kết quả Scratch).
+        theta_tolerance: Dung sai góc (radian).
+        rho_tolerance: Dung sai khoảng cách (pixel).
+        canonical: Chuẩn hóa góc về [0, π) trước khi so khớp.
+
+    Returns:
+        Tỉ lệ trong [0, 1]: phần đường của ``lines_reference`` được tìm thấy trong ``lines_test``.
+    """
+
+    def canon(rho: float, theta: float) -> Tuple[float, float]:
+        if not canonical:
+            return rho, theta
+        theta = float(theta)
+        rho = float(rho)
+        # Đưa theta về [0, pi); nếu vượt biên thì đổi dấu rho tương ứng
+        full_turns = np.floor(theta / np.pi)
+        theta = theta - full_turns * np.pi
+        if full_turns % 2 != 0:
+            rho = -rho
+        return rho, theta
+
+    if not lines_reference:
+        return 1.0
+    if not lines_test:
+        return 0.0
+
+    test_canon = [canon(rho, theta) for rho, theta in lines_test]
+
+    matched = 0
+    for ref_rho, ref_theta in lines_reference:
+        rr, rt = canon(ref_rho, ref_theta)
+        for rho, theta in test_canon:
+            d_theta = abs(theta - rt)
+            d_theta = min(d_theta, abs(d_theta - np.pi))  # góc là modulo pi
+            if d_theta <= theta_tolerance and abs(rho - rr) <= rho_tolerance:
+                matched += 1
+                break
+
+    return float(matched) / float(len(lines_reference))
 
 
 def run_unit_benchmarks(sample_image: Optional[np.ndarray] = None) -> List[Dict[str, Any]]:
@@ -421,21 +610,37 @@ def run_unit_benchmarks(sample_image: Optional[np.ndarray] = None) -> List[Dict[
     lines_cv_raw = cv2.HoughLines(e_cv, 1.0, np.pi / 180.0, 100)
     t_cv = (time.perf_counter() - t0) * 1000.0
 
-    lines_cv_count = len(lines_cv_raw) if lines_cv_raw is not None else 0
+    lines_cv = (
+        [(float(l[0][0]), float(l[0][1])) for l in lines_cv_raw]
+        if lines_cv_raw is not None else []
+    )
+    # cv2.HoughLines không khử cực đại phụ nên trả về rất nhiều đường sát nhau. Để phép
+    # đối chứng công bằng, chuẩn hóa danh sách của OpenCV bằng ĐÚNG quy trình NMS mà
+    # hough_lines_standard đang dùng, rồi so khớp theo tham số (rho, theta).
+    lines_cv_normalized = apply_parameter_space_nms(lines_cv)
+    hough_recall = calculate_line_match_rate(lines_cv_normalized, lines_sc)
+    hough_precision = calculate_line_match_rate(lines_sc, lines_cv_normalized)
+
     results.append({
         "module": "TV1",
         "algorithm": "Hough Lines Standard (rho=1, theta=1°)",
-        "mse": 0.0,
-        "psnr_db": 999.0,
-        "iou": None,
-        "dice": None,
-        "error_metric": f"Lines found: Scratch={len(lines_sc)}, CV={lines_cv_count}",
+        # Hai tập đường thẳng không cùng số phần tử và không cùng thứ tự nên KHÔNG thể
+        # tính MSE/PSNR theo pixel. Để None thay vì in ra 0.0 / 999.0 gây hiểu sai.
+        "mse": None,
+        "psnr_db": None,
+        "iou": round(hough_recall, 4),
+        "dice": round(hough_precision, 4),
+        "error_metric": (
+            f"Recall={hough_recall * 100:.1f}% / Precision={hough_precision * 100:.1f}% "
+            f"(Scratch={len(lines_sc)}, CV NMS={len(lines_cv_normalized)})"
+        ),
         "time_scratch_ms": round(t_sc, 3),
         "time_opencv_ms": round(t_cv, 3),
-        "status": "PASS" if abs(len(lines_sc) - lines_cv_count) <= 5 else "PASS"
+        # Tập đường chính phải trùng nhau: recall >= 95% và precision >= 90%
+        "status": "PASS" if (hough_recall >= 0.95 and hough_precision >= 0.90) else "FAIL"
     })
 
-    # --- Thí nghiệm 5: Sheet Corner Detection ---
+    # --- Thí nghiệm 5: Sheet Corner Detection (kịch bản phiếu chiếm toàn khung) ---
     t0 = time.perf_counter()
     c_sc = detect_sheet_corners(image, use_scratch=True)
     t_sc = (time.perf_counter() - t0) * 1000.0
@@ -448,15 +653,18 @@ def run_unit_benchmarks(sample_image: Optional[np.ndarray] = None) -> List[Dict[
     results.append({
         "module": "TV1",
         "algorithm": "Sheet Corner Localization (4 góc)",
-        "mse": round(calculate_mse(c_sc, c_cv), 4),
-        "psnr_db": 999.0,
+        # MSE/PSNR là đại lượng của ảnh, không áp dụng cho 4 cặp toạ độ. Sai số hình học
+        # được báo cáo riêng qua "Corner Dist" (px).
+        "mse": None,
+        "psnr_db": None,
         "iou": None,
         "dice": None,
         "error_metric": f"Corner Dist: {corner_err:.2f} px",
         "time_scratch_ms": round(t_sc, 3),
         "time_opencv_ms": round(t_cv, 3),
-        "status": "PASS" if corner_err <= 3.0 else "PASS"
+        "status": "PASS" if corner_err <= 3.0 else "FAIL"
     })
+
 
     return results
 
@@ -476,9 +684,12 @@ def print_benchmark_table(benchmarks: List[Dict[str, Any]]) -> None:
 
     for b in benchmarks:
         iou_str = f"{b['iou']*100:.2f}%" if b.get('iou') is not None else "—"
+        mse_str = f"{b['mse']:.4f}" if b.get('mse') is not None else "—"
+        psnr_str = f"{b['psnr_db']:.2f}" if b.get('psnr_db') is not None else "—"
+        mark = "✅" if b['status'] == "PASS" else "❌"
         print(
-            f"{b['algorithm']:<36} | {b['mse']:<8.4f} | {b['psnr_db']:<10.2f} | {iou_str:<8} | "
-            f"{b['error_metric']:<22} | {b['time_scratch_ms']:<8.2f}ms | {b['time_opencv_ms']:<6.2f}ms | ✅ {b['status']}"
+            f"{b['algorithm']:<36} | {mse_str:<8} | {psnr_str:<10} | {iou_str:<8} | "
+            f"{b['error_metric']:<22} | {b['time_scratch_ms']:<8.2f}ms | {b['time_opencv_ms']:<6.2f}ms | {mark} {b['status']}"
         )
     print(sep + "\n")
 
@@ -520,6 +731,15 @@ if __name__ == "__main__":
     nms_img = non_maximum_suppression(mag, gx, gy)
     cv2.imwrite(str(out_dir / "5_nms.png"), np.clip(nms_img, 0, 255).astype(np.uint8))
     cv2.imwrite(str(out_dir / "6_canny_edges.png"), pipeline_res["edges"])
+
+    # Không gian tham số Hough (rho, theta) của ảnh biên vừa tính
+    _, hough_acc = hough_lines_standard(
+        pipeline_res["edges"], rho_res=1.0, theta_res=np.pi / 180.0, threshold=80
+    )
+    acc_vis = np.log1p(hough_acc.astype(np.float64))
+    acc_vis = (255.0 * acc_vis / max(acc_vis.max(), 1.0)).astype(np.uint8)
+    acc_vis = cv2.applyColorMap(acc_vis, cv2.COLORMAP_VIRIDIS)
+    cv2.imwrite(str(out_dir / "7_hough_accumulator.png"), acc_vis)
 
     # Vẽ 4 góc lên ảnh
     annotated = test_img.copy() if test_img is not None else np.zeros((100, 100, 3), np.uint8)
