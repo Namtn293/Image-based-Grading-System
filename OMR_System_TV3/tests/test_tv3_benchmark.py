@@ -479,3 +479,57 @@ def test_no_cv2_import_in_core_modules_and_tv3_package_import():
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     assert proc.stdout.strip() == "OK"
 
+
+@pytest.mark.parametrize("ksize", [(3, 5), (5, 3)])
+@pytest.mark.parametrize("kshape", ["RECT", "CROSS", "ELLIPSE"])
+def test_non_square_kernel_pipeline_and_extract_parity(synthetic_ds01_clean, ksize, kshape):
+    """Kiểm chứng quy ước morph_kernel_size=(kh, kw) khớp 100% giữa Scratch và OpenCV khi kernel không vuông."""
+    sheet_gray, _, _, grid_rois = synthetic_ds01_clean
+    cfg = TV3PipelineConfig(
+        threshold_method="adaptive",
+        block_size=25,
+        C=10.0,
+        morph_kernel_shape=kshape,
+        morph_kernel_size=ksize,
+        bubble_radius=12.0,
+        inner_radius_offset=0.0,
+        tau_min=0.38,
+        delta_tau_min=0.15,
+    )
+
+    pipeline = TV3SegmentationPipeline(cfg)
+    assert pipeline.structuring_element.shape == ksize
+
+    res_sc = pipeline.run(sheet_gray, question_grid=grid_rois, run_opencv_benchmark=True, execution_mode="scratch")
+    res_cv = pipeline.run(sheet_gray, question_grid=grid_rois, run_opencv_benchmark=False, execution_mode="opencv")
+
+    bench = res_sc.benchmark_opencv
+    assert bench is not None
+    assert bench["morphology_metrics"]["iou_percent"] == 100.0
+    assert bench["morphology_metrics"]["mse"] == 0.0
+
+    direct_metrics = calc_binary_metrics(res_sc.binary_morph, res_cv.binary_morph)
+    assert direct_metrics["diff_pixels"] == 0
+    assert direct_metrics["iou_percent"] == 100.0
+
+    ans_sc, ratios_sc, _ = extract_bubble_answers(
+        warped_gray=sheet_gray,
+        total_questions=20,
+        fill_threshold=0.38,
+        use_scratch=True,
+        question_grid=grid_rois,
+        config=cfg,
+    )
+    ans_cv, ratios_cv, _ = extract_bubble_answers(
+        warped_gray=sheet_gray,
+        total_questions=20,
+        fill_threshold=0.38,
+        use_scratch=False,
+        question_grid=grid_rois,
+        config=cfg,
+    )
+    assert ans_sc == ans_cv
+    for q_id in range(1, 21):
+        for opt in ("A", "B", "C", "D"):
+            assert ratios_sc[q_id][opt] == pytest.approx(ratios_cv[q_id][opt], abs=1e-6)
+

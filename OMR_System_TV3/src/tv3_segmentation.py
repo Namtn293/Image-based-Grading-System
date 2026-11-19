@@ -153,7 +153,7 @@ class TV3PipelineConfig:
     apply_opening: bool = True          # Phép Mở: xóa nhiễu muối tiêu, bụi chì và gai nét
     apply_closing: bool = True          # Phép Đóng: lấp đầy lỗ hổng bên trong vết chì tô
     morph_kernel_shape: str = "RECT"    # 'RECT', 'CROSS', 'ELLIPSE'
-    morph_kernel_size: Tuple[int, int] = (3, 3)
+    morph_kernel_size: Tuple[int, int] = (3, 3)  # (kh, kw) lẻ (rows, cols)
 
     # 3. Tham số Gán nhãn thành phần liên thông (Two-Pass CCL)
     connectivity: int = 8               # 8-lân cận hoặc 4-lân cận
@@ -553,7 +553,7 @@ class TV3SegmentationPipeline:
 
         # 2. Hình thái học OpenCV
         t0 = time.perf_counter()
-        kw, kh = self.config.morph_kernel_size
+        kh, kw = self.config.morph_kernel_size
         cv_kshape = {
             "RECT": cv2.MORPH_RECT,
             "CROSS": cv2.MORPH_CROSS,

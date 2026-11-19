@@ -90,7 +90,7 @@ class TestBinaryMorphology(unittest.TestCase):
 
     def test_erosion_vs_opencv(self):
         for shape in ["RECT", "CROSS", "ELLIPSE"]:
-            for ksize in [(3, 3), (5, 5)]:
+            for ksize in [(3, 3), (5, 5), (3, 5), (5, 3)]:
                 k_sc = create_structuring_element(shape, ksize)
                 kw, kh = ksize[1], ksize[0]
                 cv_kshape = {
@@ -110,7 +110,7 @@ class TestBinaryMorphology(unittest.TestCase):
 
     def test_dilation_vs_opencv(self):
         for shape in ["RECT", "CROSS", "ELLIPSE"]:
-            for ksize in [(3, 3), (5, 5)]:
+            for ksize in [(3, 3), (5, 5), (3, 5), (5, 3)]:
                 k_sc = create_structuring_element(shape, ksize)
                 kw, kh = ksize[1], ksize[0]
                 cv_kshape = {
@@ -319,6 +319,18 @@ class TestBenchmarkFunctions(unittest.TestCase):
             self.assertLess(metrics["mse"], 0.01)
             self.assertIn("time_scratch_ms", metrics)
             self.assertIn("time_opencv_ms", metrics)
+
+    def test_benchmark_morphology_vs_opencv_non_square(self):
+        img = np.zeros((100, 100), dtype=np.uint8)
+        img[20:70, 20:70] = 255
+        img[40:43, 30:60] = 0
+        img[10, 10] = 255
+        for shape in ["RECT", "CROSS", "ELLIPSE"]:
+            for ksize in [(3, 5), (5, 3)]:
+                res = benchmark_morphology_vs_opencv(img, kernel_size=ksize, shape=shape, op="all", num_runs=1)
+                for op_name, metrics in res.items():
+                    self.assertEqual(metrics["diff_pixels"], 0, f"Khác OpenCV tại shape={shape}, ksize={ksize}, op={op_name}")
+                    self.assertEqual(metrics["iou_percent"], 100.0)
 
     def test_benchmark_ccl_vs_opencv(self):
         img = np.zeros((80, 80), dtype=np.uint8)
