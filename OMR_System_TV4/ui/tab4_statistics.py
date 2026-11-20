@@ -15,11 +15,11 @@ from matplotlib.patches import Patch
 
 from tv4_enhancement_eval import OMRGrader
 from pipeline_coordinator import OMRPipeline
-from ui.styles import apply_modern_chart_style
+from ui.styles import apply_modern_chart_style, read_image_unicode
 
 
 @st.cache_data
-def get_default_graded_batch(samples_dir: str, default_key_path: str) -> List[Dict[str, Any]]:
+def get_default_graded_batch(samples_dir: str, default_key_path: str, key_mtime: float = 0.0) -> List[Dict[str, Any]]:
     """Tải và chấm điểm sẵn 5 bài thi thực tế từ thư mục data/samples để hiển thị số liệu thực."""
     results = []
     p = OMRPipeline(default_key_path)
@@ -29,7 +29,7 @@ def get_default_graded_batch(samples_dir: str, default_key_path: str) -> List[Di
                 raw_sid = fname.split("_")[1] if "_" in fname else "B21DCCN001"
                 sid = raw_sid.replace("B21DCCN00", "SV-0") if "B21DCCN" in raw_sid else raw_sid
                 fpath = os.path.join(samples_dir, fname)
-                img = cv2.imread(fpath)
+                img = read_image_unicode(fpath)
                 if img is not None:
                     res = p.process_sheet(img, sid, use_scratch_mode=False)
                     results.append(res["grading_result"])
@@ -37,23 +37,27 @@ def get_default_graded_batch(samples_dir: str, default_key_path: str) -> List[Di
 
 
 @st.cache_data
-def generate_mock_graded_batch(num_students: int = 60, key_path: str = "") -> List[Dict[str, Any]]:
+def generate_mock_graded_batch(num_students: int = 60, key_path: str = "", default_key_path: str = "") -> List[Dict[str, Any]]:
     """Tạo bộ dữ liệu mẫu giả lập (Mock Data) chuẩn hóa cho 60 sinh viên phục vụ kiểm thử trực quan phổ điểm."""
     grader = OMRGrader(key_path)
+    if not grader.answer_key and default_key_path and os.path.exists(default_key_path):
+        grader = OMRGrader(default_key_path)
+    if not grader.answer_key:
+        grader.set_answer_key_dict({i: "A" for i in range(1, 21)})
     ans_key = grader.answer_key
     questions = sorted(ans_key.keys())
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     results = []
     options = ["A", "B", "C", "D"]
     q_difficulties = {q: 0.50 + 0.45 * (np.sin(q * 1.3) ** 2) for q in questions}
     for i in range(1, num_students + 1):
         sid = f"SV21DCCN{i:03d}"
-        ability = float(np.random.normal(0.2, 0.45))
+        ability = float(rng.normal(0.2, 0.45))
         student_answers = {}
         for q in questions:
             corr_ans = ans_key[q]
             p_correct = float(np.clip(q_difficulties[q] + ability, 0.15, 0.98))
-            r = float(np.random.rand())
+            r = float(rng.random())
             if r < p_correct:
                 student_answers[q] = corr_ans
             elif r < p_correct + 0.03:
@@ -62,7 +66,7 @@ def generate_mock_graded_batch(num_students: int = 60, key_path: str = "") -> Li
                 student_answers[q] = "MULTIPLE"
             else:
                 wrong_choices = [c for c in options if c != corr_ans]
-                student_answers[q] = str(np.random.choice(wrong_choices))
+                student_answers[q] = str(rng.choice(wrong_choices))
         res = grader.grade_student(sid, student_answers)
         results.append(res)
     return results
@@ -86,7 +90,7 @@ def render_tab4(samples_dir: str, default_key_path: str):
             if st.button("Khôi Phục Dữ Liệu Gốc", type="secondary", use_container_width=True, key="btn_reset_mock"):
                 st.session_state.use_mock_data = False
                 st.rerun()
-        batch = generate_mock_graded_batch(60, st.session_state.active_key_path)
+        batch = generate_mock_graded_batch(60, st.session_state.active_key_path, default_key_path)
     else:
         if not actual_batch:
             with banner_c1:
@@ -95,7 +99,8 @@ def render_tab4(samples_dir: str, default_key_path: str):
                 if st.button("Nạp Dữ Liệu Mẫu (Mock Data)", type="primary", use_container_width=True, key="btn_load_mock_empty"):
                     st.session_state.use_mock_data = True
                     st.rerun()
-            batch = get_default_graded_batch(samples_dir, default_key_path)
+            key_mtime = os.path.getmtime(default_key_path) if os.path.exists(default_key_path) else 0.0
+            batch = get_default_graded_batch(samples_dir, default_key_path, key_mtime)
         else:
             with banner_c1:
                 st.success(f"Đang hiển thị thống kê thực tế từ {len(actual_batch)} bài thi vừa chấm tại Tab 1.")
@@ -105,8 +110,12 @@ def render_tab4(samples_dir: str, default_key_path: str):
                     st.rerun()
             batch = actual_batch
 
-    sample_scores = np.array([r["score_10"] for r in batch])
     total_st = len(batch)
+    if total_st == 0:
+        st.warning("Chưa có dữ liệu bài thi để thống kê. Vui lòng chấm bài tại Tab 1 hoặc bật Mock Data.")
+        return
+
+    sample_scores = np.array([r["score_10"] for r in batch])
     q_keys = sorted({d["question"] for r in batch for d in r["details"]})
     q_labels = [f"Q{qk:02d}" for qk in q_keys]
     q_rates = []
@@ -165,6 +174,7 @@ def render_tab4(samples_dir: str, default_key_path: str):
         )
         n, bins, patches = ax.hist(sample_scores, bins=np.arange(0, 11, 1), color="#3B82F6", edgecolor="#FFFFFF", linewidth=1.2, alpha=0.9, rwidth=0.9)
         ax.set_xlim(0, 10.5)
+        ax.set_xticks(range(0, 11))
         ax.axvline(avg_score, color="#EF4444", linestyle="--", linewidth=1.8, label=f"Điểm TB: {avg_score:.2f}")
         ax.legend(frameon=False, loc="upper left", fontsize=9)
 
@@ -225,12 +235,18 @@ def render_tab4(samples_dir: str, default_key_path: str):
         erased_qs = [d["question"] for d in det if d.get("is_erased")]
         blank_qs = [d["question"] for d in det if d.get("status") == "BLANK"]
         multi_qs = [d["question"] for d in det if d.get("status") == "MULTIPLE"]
+        sheet_w = r.get("sheet_warning")
+        fb_w = r.get("fallback_warning")
         warn = r.get("warning")
 
-        if erased_qs or multi_qs or blank_qs or warn:
+        if erased_qs or multi_qs or blank_qs or warn or sheet_w or fb_w:
             reasons = []
-            if warn:
-                reasons.append(f"Cảnh báo cấu trúc: {warn}")
+            if sheet_w:
+                reasons.append(sheet_w)
+            if fb_w:
+                reasons.append(fb_w)
+            if warn and not sheet_w and not fb_w:
+                reasons.append(warn)
             if erased_qs:
                 reasons.append(f"Vết tẩy xóa (Câu: {', '.join(str(q) for q in erased_qs)})")
             if multi_qs:

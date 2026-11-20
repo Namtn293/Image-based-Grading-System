@@ -108,7 +108,7 @@ class OMRGrader:
         if answer_key_path and os.path.exists(answer_key_path):
             self.load_answer_key(answer_key_path)
 
-    def load_answer_key(self, csv_path: str) -> Dict[int, str]:
+    def load_answer_key(self, csv_path: Union[str, os.PathLike, io.StringIO]) -> Dict[int, str]:
         """Robustly load answer key from CSV file.
 
         Handles:
@@ -383,9 +383,9 @@ class OMRGrader:
             }
             for qk in q_keys:
                 correct = sum(1 for r in batch_results if any(d["question"] == qk and d["is_correct"] for d in r["details"]))
+                wrong = sum(1 for r in batch_results if any(d["question"] == qk and d["status"] == "INCORRECT" for d in r["details"]))
                 blank = sum(1 for r in batch_results if any(d["question"] == qk and d["status"] == "BLANK" for d in r["details"]))
                 mult = sum(1 for r in batch_results if any(d["question"] == qk and d["status"] == "MULTIPLE" for d in r["details"]))
-                wrong = total_students - correct - blank - mult
 
                 acc_rate = round((correct / max(total_students, 1)) * 100.0, 1)
                 err_rate = round(100.0 - acc_rate, 1)

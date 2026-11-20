@@ -2,7 +2,21 @@
 Standardized Light SaaS & Academic Engineering Theme (Zero emoji text clutter).
 """
 
+import os
+from typing import Optional
+import cv2
+import numpy as np
 import streamlit as st
+
+
+def read_image_unicode(path: str, flags: int = cv2.IMREAD_COLOR) -> Optional[np.ndarray]:
+    """Read image safely on Windows paths containing non-ASCII / Unicode characters."""
+    if not path or not os.path.exists(path):
+        return None
+    data = np.fromfile(path, dtype=np.uint8)
+    if data.size == 0:
+        return None
+    return cv2.imdecode(data, flags)
 
 
 def inject_custom_styles():

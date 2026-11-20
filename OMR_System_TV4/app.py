@@ -60,10 +60,6 @@ if "tab2_m3_result" not in st.session_state:
     st.session_state.tab2_m3_result = None
 if "tab2_m4_result" not in st.session_state:
     st.session_state.tab2_m4_result = None
-if "tab2_result" not in st.session_state:
-    st.session_state.tab2_result = None
-if "tab2_last_sig" not in st.session_state:
-    st.session_state.tab2_last_sig = None
 if "tab3_result" not in st.session_state:
     st.session_state.tab3_result = None
 if "tab3_last_sig" not in st.session_state:
@@ -74,6 +70,8 @@ if "tab3_ablation" not in st.session_state:
     st.session_state.tab3_ablation = None
 if "active_key_path" not in st.session_state:
     st.session_state.active_key_path = DEFAULT_KEY_PATH
+if "key_uploader_nonce" not in st.session_state:
+    st.session_state.key_uploader_nonce = 0
 if "pipeline_step_idx" not in st.session_state:
     st.session_state.pipeline_step_idx = 0
 
@@ -195,7 +193,8 @@ with tab3:
         fill_thresh=fill_thresh,
         apply_enhancement=apply_enhancement,
         samples_dir=SAMPLES_DIR,
-        default_sheet_path=DEFAULT_SHEET_PATH
+        default_sheet_path=DEFAULT_SHEET_PATH,
+        default_key_path=DEFAULT_KEY_PATH
     )
 
 with tab4:

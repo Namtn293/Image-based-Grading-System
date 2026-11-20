@@ -5,8 +5,10 @@ Production Automated Test Suite.
 
 import os
 import io
+import subprocess
 import unittest
 import numpy as np
+import pandas as pd
 import cv2
 import openpyxl
 
@@ -320,12 +322,7 @@ class TestTV4Algorithms(unittest.TestCase):
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         key_path = os.path.join(base_dir, "data", "answer_key.csv")
         samples_dir = os.path.join(base_dir, "data", "samples")
-        pipeline = OMRPipeline()
-        pipeline.grader.answer_key = {
-            1: 'A', 2: 'C', 3: 'B', 4: 'D', 5: 'A', 6: 'B', 7: 'C', 8: 'D', 9: 'A', 10: 'C',
-            11: 'B', 12: 'D', 13: 'A', 14: 'C', 15: 'B', 16: 'D', 17: 'A', 18: 'B', 19: 'C', 20: 'D'
-        }
-        pipeline.grader.total_questions = 20
+        pipeline = OMRPipeline(key_path)
 
         expected_scores = {
             "01_B21DCCN001_Chuan.png": 8.5,
@@ -372,12 +369,7 @@ class TestTV4Algorithms(unittest.TestCase):
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         key_path = os.path.join(base_dir, "data", "answer_key.csv")
         s1_path = os.path.join(base_dir, "data", "samples", "01_B21DCCN001_Chuan.png")
-        pipe = OMRPipeline()
-        pipe.grader.answer_key = {
-            1: 'A', 2: 'C', 3: 'B', 4: 'D', 5: 'A', 6: 'B', 7: 'C', 8: 'D', 9: 'A', 10: 'C',
-            11: 'B', 12: 'D', 13: 'A', 14: 'C', 15: 'B', 16: 'D', 17: 'A', 18: 'B', 19: 'C', 20: 'D'
-        }
-        pipe.grader.total_questions = 20
+        pipe = OMRPipeline(key_path)
 
         if os.path.exists(s1_path):
             # 2D grayscale input
@@ -414,12 +406,7 @@ class TestTV4Algorithms(unittest.TestCase):
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         key_path = os.path.join(base_dir, "data", "answer_key.csv")
         s1_path = os.path.join(base_dir, "data", "samples", "01_B21DCCN001_Chuan.png")
-        pipe = OMRPipeline()
-        pipe.grader.answer_key = {
-            1: 'A', 2: 'C', 3: 'B', 4: 'D', 5: 'A', 6: 'B', 7: 'C', 8: 'D', 9: 'A', 10: 'C',
-            11: 'B', 12: 'D', 13: 'A', 14: 'C', 15: 'B', 16: 'D', 17: 'A', 18: 'B', 19: 'C', 20: 'D'
-        }
-        pipe.grader.total_questions = 20
+        pipe = OMRPipeline(key_path)
 
         if os.path.exists(s1_path):
             img = cv2.imread(s1_path)
@@ -475,6 +462,89 @@ class TestTV4Algorithms(unittest.TestCase):
             pipe.grader.total_questions = 20
             res_ok = pipe.process_sheet(img, "TEST_MATCH")
             self.assertIsNone(res_ok.get("warning"))
+
+    def test_ncc_orientation_correction_0_90_180_270(self):
+        """Verify NCC Anchor Marker orientation detection and grading for 0, 90, 180, 270 deg rotations."""
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        key_path = os.path.join(base_dir, "data", "answer_key.csv")
+        samples_dir = os.path.join(base_dir, "data", "samples")
+        pipe = OMRPipeline(key_path)
+
+        cases = [
+            ("01_B21DCCN001_Chuan.png", 8.5),
+            ("02_B21DCCN002_Nghieng_BanToi.png", 9.0),
+        ]
+        rotations = [(0, 0), (90, 3), (180, 2), (270, 1)]
+        for fname, exp_score in cases:
+            img = cv2.imread(os.path.join(samples_dir, fname))
+            self.assertIsNotNone(img)
+            for angle, k in rotations:
+                rot = np.rot90(img, k).copy()
+                for use_sc in (True, False):
+                    res = pipe.process_sheet(rot, f"{fname}_{angle}", use_scratch_mode=use_sc)
+                    self.assertEqual(
+                        res["detected_angle"], angle,
+                        f"Wrong detected_angle for {fname} rot={angle} use_scratch={use_sc}"
+                    )
+                    self.assertEqual(
+                        res["grading_result"]["score_10"], exp_score,
+                        f"Score mismatch for {fname} rot={angle} use_scratch={use_sc}"
+                    )
+
+    def test_legacy_sheet_without_anchor_keeps_zero_angle(self):
+        """Verify legacy sheets with 4 identical solid black corner squares do not falsely rotate."""
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        key_path = os.path.join(base_dir, "data", "answer_key.csv")
+        s1_path = os.path.join(base_dir, "data", "samples", "01_B21DCCN001_Chuan.png")
+        img = cv2.imread(s1_path).copy()
+        # Overwrite TR concentric anchor with a solid black square like TL/BR/BL
+        img[70:100, 726:756] = 0
+
+        pipe = OMRPipeline(key_path)
+        res = pipe.process_sheet(img, "LEGACY_4_SOLID", use_scratch_mode=True)
+        self.assertEqual(res["detected_angle"], 0)
+        self.assertEqual(res["grading_result"]["score_10"], 8.5)
+
+    def test_pure_scratch_tv4_filters_no_cv2_import(self):
+        """Verify pure Scratch modules tv4_filters and tv4_metrics do not import cv2 on import."""
+        code = (
+            "import sys; "
+            f"sys.path.insert(0, {SRC_DIR!r}); "
+            "import tv4_filters, tv4_metrics; "
+            "print('cv2' in sys.modules)"
+        )
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+        self.assertEqual(proc.stdout.strip(), "False")
+
+    def test_ablation_study_parity_on_erasure_and_shadow(self):
+        """Verify run_ablation_study achieves 100% on DS-05 erasure (delta_tau) and DS-03 shadow."""
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        key_path = os.path.join(base_dir, "data", "answer_key.csv")
+        samples_dir = os.path.join(base_dir, "data", "samples")
+        pipe = OMRPipeline(key_path)
+
+        # Erasure sheet (04): delta_tau rule gives 100% Adaptive accuracy
+        p4 = os.path.join(samples_dir, "04_B21DCCN004_ToSaiQuyChe_TayXoa.png")
+        df4 = pd.read_csv(p4.replace(".png", "_gt.csv"))
+        gt4 = dict(zip(df4.iloc[:, 0].astype(int), df4.iloc[:, 1].astype(str).str.strip()))
+        out4 = pipe.process_sheet(cv2.imread(p4), "ABL_04", use_scratch_mode=True)
+        ab4 = run_ablation_study(
+            out4["warped_gray"], gt4,
+            question_grid=out4["question_grid"], bubble_radius=out4["bubble_radius"]
+        )
+        self.assertEqual(ab4["adaptive_accuracy_pct"], 100.0)
+
+        # Shadow sheet (05): Adaptive (100%) outperforms Global Otsu
+        p5 = os.path.join(samples_dir, "05_B21DCCN005_BongDo_ChieuSangKhongDeu.png")
+        df5 = pd.read_csv(p5.replace(".png", "_gt.csv"))
+        gt5 = dict(zip(df5.iloc[:, 0].astype(int), df5.iloc[:, 1].astype(str).str.strip()))
+        out5 = pipe.process_sheet(cv2.imread(p5), "ABL_05", use_scratch_mode=True)
+        ab5 = run_ablation_study(
+            out5["warped_gray"], gt5,
+            question_grid=out5["question_grid"], bubble_radius=out5["bubble_radius"]
+        )
+        self.assertEqual(ab5["adaptive_accuracy_pct"], 100.0)
+        self.assertLess(ab5["otsu_accuracy_pct"], ab5["adaptive_accuracy_pct"])
 
 
 if __name__ == "__main__":

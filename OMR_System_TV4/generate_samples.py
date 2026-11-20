@@ -10,6 +10,14 @@ os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(SAMPLES_DIR, exist_ok=True)
 
 
+def create_anchor_marker_template(size: int = 30) -> np.ndarray:
+    """Create a rotation-invariant concentric square anchor marker (2D uint8) for the TR corner."""
+    anchor = np.zeros((size, size), dtype=np.uint8)
+    anchor[5:size - 5, 5:size - 5] = 245
+    anchor[11:size - 11, 11:size - 11] = 0
+    return anchor
+
+
 def create_base_omr_sheet(student_id: str, student_fill: dict, erased_marks: dict = None) -> np.ndarray:
     """Create an 800x1000 OMR sheet with given student answers and optional faint erasures."""
     sheet = np.full((1000, 800, 3), 245, dtype=np.uint8)
@@ -17,9 +25,10 @@ def create_base_omr_sheet(student_id: str, student_fill: dict, erased_marks: dic
     # Outer fiducial border (placed below top banner area and above bottom legend area)
     cv2.rectangle(sheet, (36, 62), (764, 942), (20, 20, 20), 3)
 
-    # 4 corner fiducial square markers
+    # 4 corner fiducial markers (TR uses distinct concentric anchor for 0/90/180/270 deg NCC orientation)
     cv2.rectangle(sheet, (44, 70), (74, 100), (0, 0, 0), -1)
-    cv2.rectangle(sheet, (726, 70), (756, 100), (0, 0, 0), -1)
+    anchor_tr = create_anchor_marker_template(30)
+    sheet[70:100, 726:756] = anchor_tr[:, :, np.newaxis]
     cv2.rectangle(sheet, (726, 904), (756, 934), (0, 0, 0), -1)
     cv2.rectangle(sheet, (44, 904), (74, 934), (0, 0, 0), -1)
 

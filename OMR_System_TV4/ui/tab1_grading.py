@@ -4,7 +4,7 @@ Clean, professional UI without text emojis.
 
 import os
 import io
-import time
+import tempfile
 from typing import List, Tuple
 import cv2
 import numpy as np
@@ -13,6 +13,7 @@ import streamlit as st
 
 from tv4_enhancement_eval import OMRGrader
 from pipeline_coordinator import OMRPipeline
+from ui.styles import read_image_unicode
 
 
 def render_tab1(
@@ -30,13 +31,14 @@ def render_tab1(
     with st.expander("Cấu Hình Bộ Đáp Án Chuẩn (Answer Key CSV)", expanded=False):
         ak_col1, ak_col2, ak_col3 = st.columns([2, 1.2, 1], vertical_alignment="bottom")
         with ak_col1:
-            up_key = st.file_uploader("Nạp file đáp án chuẩn CSV mới:", type=["csv"], key="tab1_key_uploader")
+            nonce = st.session_state.get("key_uploader_nonce", 0)
+            up_key = st.file_uploader("Nạp file đáp án chuẩn CSV mới:", type=["csv"], key=f"tab1_key_uploader_{nonce}")
             if up_key is not None:
                 try:
                     raw_bytes = up_key.getvalue()
                     val_g = OMRGrader()
                     val_g.load_answer_key(io.StringIO(raw_bytes.decode("utf-8-sig")))
-                    saved_path = os.path.join(data_dir, "uploaded_key.csv")
+                    saved_path = os.path.join(tempfile.gettempdir(), "omr_tv4_uploaded_key.csv")
                     with open(saved_path, "wb") as f:
                         f.write(raw_bytes)
                     st.session_state.active_key_path = saved_path
@@ -52,6 +54,7 @@ def render_tab1(
             st.markdown(f"**Quy mô hiện tại:** `{curr_q_count} câu hỏi`")
             if st.session_state.active_key_path != default_key_path:
                 if st.button("Đặt Lại Mặc Định (20 câu)", use_container_width=True, key="reset_key_btn"):
+                    st.session_state.key_uploader_nonce = st.session_state.get("key_uploader_nonce", 0) + 1
                     st.session_state.active_key_path = default_key_path
                     st.rerun()
         with ak_col3:
@@ -104,7 +107,12 @@ def render_tab1(
         with col_btn:
             btn_clicked = st.button("Bắt Đầu Chấm Điểm", type="primary", use_container_width=True)
 
-        if btn_clicked or (st.session_state.tab1_processed_items and st.session_state.tab1_last_signature != current_tab1_sig):
+        if btn_clicked or (
+            st.session_state.tab1_processed_items
+            and st.session_state.tab1_last_signature
+            and st.session_state.tab1_last_signature[0] == "SAMPLE"
+            and st.session_state.tab1_last_signature != current_tab1_sig
+        ):
             trigger_run = True
             st.session_state.tab1_last_signature = current_tab1_sig
             if scen_val == "ALL_SAMPLES":
@@ -112,7 +120,7 @@ def render_tab1(
                     if fname.endswith(".png"):
                         raw_sid = fname.split("_")[1]
                         sid = raw_sid.replace("B21DCCN00", "SV-0") if "B21DCCN" in raw_sid else raw_sid
-                        img = cv2.imread(os.path.join(samples_dir, fname))
+                        img = read_image_unicode(os.path.join(samples_dir, fname))
                         if img is not None:
                             images_to_run.append((sid, img))
             else:
@@ -121,7 +129,7 @@ def render_tab1(
                     fpath = default_sheet_path
                 raw_sid = scen_val.split("_")[1] if "_" in scen_val else "B21DCCN001"
                 sid = raw_sid.replace("B21DCCN00", "SV-0") if "B21DCCN" in raw_sid else raw_sid
-                img = cv2.imread(fpath)
+                img = read_image_unicode(fpath)
                 if img is not None:
                     images_to_run.append((sid, img))
     else:
@@ -133,13 +141,19 @@ def render_tab1(
                 accept_multiple_files=True,
                 label_visibility="collapsed"
             )
-        up_names = [up.name for up in uploaded_sheets] if uploaded_sheets else []
+        up_names = tuple((up.name, up.size) for up in uploaded_sheets) if uploaded_sheets else ()
         current_tab1_sig = ("UPLOAD", up_names, use_scratch, apply_enhancement, fill_thresh, active_key_path)
 
         with col_btn2:
             btn_up_clicked = st.button("Chấm Ảnh Đã Tải", type="primary", use_container_width=True)
 
-        if btn_up_clicked or (uploaded_sheets and st.session_state.tab1_processed_items and st.session_state.tab1_last_signature != current_tab1_sig and st.session_state.tab1_last_signature and st.session_state.tab1_last_signature[0] == "UPLOAD"):
+        if btn_up_clicked or (
+            uploaded_sheets
+            and st.session_state.tab1_processed_items
+            and st.session_state.tab1_last_signature
+            and st.session_state.tab1_last_signature[0] == "UPLOAD"
+            and st.session_state.tab1_last_signature != current_tab1_sig
+        ):
             if uploaded_sheets:
                 trigger_run = True
                 st.session_state.tab1_last_signature = current_tab1_sig
@@ -183,6 +197,7 @@ def render_tab1(
         progress_bar.empty()
 
         st.session_state.tab1_processed_items = results_list
+        st.session_state.tab1_selected_student_idx = 0
         st.session_state.graded_batch_results = [r["grading_result"] for r in results_list]
 
     # Render persisted results OR clean Empty State
@@ -191,9 +206,16 @@ def render_tab1(
 
         if len(results_list) > 1:
             st.success(f"Đã hoàn tất chấm hàng loạt {len(results_list)} bài thi.")
-            warnings_list = [r for r in results_list if r.get("warning")]
-            if warnings_list:
-                st.warning(f"Cảnh báo cấu trúc: Có {len(warnings_list)}/{len(results_list)} bài thi có số câu trên ảnh không khớp với file đáp án.")
+            sheet_warnings = [r for r in results_list if r.get("sheet_warning")]
+            fb_warnings = [r for r in results_list if r.get("fallback_warning")]
+            if sheet_warnings:
+                st.warning(
+                    f"Cảnh báo cấu trúc: Có {len(sheet_warnings)}/{len(results_list)} bài thi có số câu trên ảnh không khớp với file đáp án."
+                )
+            if fb_warnings:
+                st.warning(
+                    f"Cảnh báo Fallback: Có {len(fb_warnings)}/{len(results_list)} bài thi phải chuyển sang OpenCV Baseline."
+                )
             summary_rows = []
             for r in results_list:
                 g = r["grading_result"]
@@ -206,15 +228,31 @@ def render_tab1(
                     "Phạm Quy (>1 ô)": g["multiple_count"],
                     "Thời gian xử lý (ms)": f"{r['latencies']['total_pipeline_ms']:.1f}"
                 }
-                if r.get("warning"):
+                has_sw = bool(r.get("sheet_warning"))
+                has_fw = bool(r.get("fallback_warning"))
+                if has_sw and has_fw:
+                    row_data["Cảnh báo"] = "Lệch số câu đề thi | Fallback OpenCV"
+                elif has_sw:
                     row_data["Cảnh báo"] = "Lệch số câu đề thi"
+                elif has_fw:
+                    row_data["Cảnh báo"] = "Fallback OpenCV"
+                elif r.get("warning"):
+                    row_data["Cảnh báo"] = r["warning"]
                 summary_rows.append(row_data)
             st.dataframe(pd.DataFrame(summary_rows), use_container_width=True)
+
+            def _fmt_student(i: int) -> str:
+                tags = []
+                if results_list[i].get("sheet_warning"):
+                    tags.append(" [Lệch đề]")
+                if results_list[i].get("fallback_warning"):
+                    tags.append(" [Fallback]")
+                return f"{results_list[i]['student_id']} — Điểm: {results_list[i]['grading_result']['score_10']}/10{''.join(tags)}"
 
             selected_idx = st.selectbox(
                 "Chọn sinh viên để xem chi tiết bài thi & phúc khảo:",
                 range(len(results_list)),
-                format_func=lambda i: f"{results_list[i]['student_id']} — Điểm: {results_list[i]['grading_result']['score_10']}/10" + (" [Lệch đề]" if results_list[i].get("warning") else ""),
+                format_func=_fmt_student,
                 key="tab1_selected_student_idx"
             )
             active_res = results_list[selected_idx]
@@ -224,8 +262,20 @@ def render_tab1(
 
         gr = active_res["grading_result"]
 
-        if active_res.get("warning"):
-            st.error(f"Cảnh báo cấu trúc: {active_res['warning']}")
+        sheet_w = active_res.get("sheet_warning")
+        fb_w = active_res.get("fallback_warning")
+        if sheet_w:
+            st.error(sheet_w)
+        if fb_w:
+            st.warning(fb_w)
+        if not sheet_w and not fb_w and active_res.get("warning"):
+            st.error(active_res["warning"])
+
+        st.caption(
+            f"Chế độ thực thi: {active_res.get('mode', 'Scratch (NumPy)')} | "
+            f"Góc xoay hiệu chỉnh (NCC): {active_res.get('detected_angle', 0)}° | "
+            f"Tổng thời gian: {active_res['latencies']['total_pipeline_ms']:.1f} ms"
+        )
 
         # 5 Metric Cards
         st.write("")
@@ -270,7 +320,7 @@ def render_tab1(
             """, unsafe_allow_html=True)
             st.image(
                 cv2.cvtColor(active_res["annotated_image"], cv2.COLOR_BGR2RGB),
-                caption="Xanh: Đúng | Đỏ: Sai | Vàng: Bỏ trống/Phạm quy",
+                caption="Xanh: Đúng | Đỏ: Sai | Cam: Bỏ trống / Phạm quy / Tẩy xóa",
                 use_container_width=True
             )
 
@@ -317,15 +367,38 @@ def render_tab1(
                     f"Đáp án xác nhận lại (Hiện tại: {curr_choice}):",
                     opt_choices,
                     index=curr_idx,
-                    key="tab1_override_opt"
+                    key=f"tab1_override_opt_{selected_idx}_{q_to_edit}"
                 )
             with ov_col3:
                 if st.button("Cập Nhật", use_container_width=True, key="tab1_override_btn"):
                     current_ans_map = {d["question"]: d["student_ans"] for d in gr["details"]}
                     current_ans_map[q_to_edit] = new_opt
-                    updated_gr = pipeline.grader.grade_student(gr["student_id"], current_ans_map)
+                    erased_map = dict(active_res.get("erased_questions") or {})
+                    erased_map.pop(q_to_edit, None)
+                    updated_gr = pipeline.grader.grade_student(
+                        gr["student_id"],
+                        current_ans_map,
+                        erased_questions=erased_map
+                    )
+                    if active_res.get("warning"):
+                        updated_gr["warning"] = active_res["warning"]
+                        updated_gr["detected_sheet_questions"] = active_res.get("detected_questions")
+                    if active_res.get("sheet_warning"):
+                        updated_gr["sheet_warning"] = active_res["sheet_warning"]
+                    if active_res.get("fallback_warning"):
+                        updated_gr["fallback_warning"] = active_res["fallback_warning"]
                     vis_base = cv2.cvtColor(active_res["warped_gray"], cv2.COLOR_GRAY2BGR)
-                    updated_img = pipeline._annotate_sheet_results(vis_base, updated_gr, ratios, fill_thresh)
+                    updated_img = pipeline._annotate_sheet_results(
+                        vis_base,
+                        updated_gr,
+                        ratios,
+                        fill_thresh,
+                        question_grid=active_res.get("question_grid"),
+                        bubble_radius=active_res.get("bubble_radius"),
+                        warning=active_res.get("warning"),
+                        detected_questions=active_res.get("detected_questions")
+                    )
+                    st.session_state.tab1_processed_items[selected_idx]["erased_questions"] = erased_map
                     st.session_state.tab1_processed_items[selected_idx]["grading_result"] = updated_gr
                     st.session_state.tab1_processed_items[selected_idx]["annotated_image"] = updated_img
                     st.session_state.graded_batch_results = [

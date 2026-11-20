@@ -17,7 +17,6 @@ from __future__ import annotations
 import time
 from typing import Dict, Any, Union
 import numpy as np
-import cv2
 
 try:
     from .tv4_metrics import calculate_mse, calculate_psnr, calculate_difference_map
@@ -205,10 +204,11 @@ def median_filter_scratch(
       Select the middle rank (median) at index m = (k^2) // 2:
           I_filtered(x, y) = W_sorted[m]
 
-    Implementation highlights (100% pure from-scratch without np.pad, sliding_window_view, or np.partition):
+    Implementation highlights (100% pure NumPy without np.pad, sliding_window_view, or OpenCV):
       1. Manual 2D boundary padding via `_pad_2d_scratch`.
       2. Explicit collection of the k*k shifted 2D neighborhood slices `padded[dy:dy+h, dx:dx+w]`.
-      3. Explicit vectorized insertion sort across the k*k neighborhood channels to find the exact median.
+      3. Rank selection: vectorized compare-exchange insertion sort for k <= 3, and O(N) `np.partition`
+         selection for k >= 5 to avoid O(k^4) sorting cost while guaranteeing exact parity with OpenCV.
 
     Args:
         image: 2D numpy array of uint8 (grayscale).
@@ -276,6 +276,8 @@ def median_filter_scratch(
 
 def benchmark_hist_equalization(image: np.ndarray, iterations: int = 5) -> Dict[str, Any]:
     """Benchmark Histogram Equalization: Scratch vs OpenCV."""
+    import cv2
+
     if image.ndim == 3 and image.shape[2] == 1:
         image = image[:, :, 0]
     elif image.ndim != 2:
@@ -320,6 +322,8 @@ def benchmark_median_filter(
     iterations: int = 5
 ) -> Dict[str, Any]:
     """Benchmark Median Filter: Scratch vs OpenCV."""
+    import cv2
+
     if image.ndim == 3 and image.shape[2] == 1:
         image = image[:, :, 0]
     elif image.ndim != 2:
