@@ -237,15 +237,18 @@ def render_tab4(samples_dir: str, default_key_path: str):
         multi_qs = [d["question"] for d in det if d.get("status") == "MULTIPLE"]
         sheet_w = r.get("sheet_warning")
         fb_w = r.get("fallback_warning")
+        orient_w = r.get("orientation_warning")
         warn = r.get("warning")
 
-        if erased_qs or multi_qs or blank_qs or warn or sheet_w or fb_w:
+        if erased_qs or multi_qs or blank_qs or warn or sheet_w or fb_w or orient_w:
             reasons = []
             if sheet_w:
                 reasons.append(sheet_w)
             if fb_w:
                 reasons.append(fb_w)
-            if warn and not sheet_w and not fb_w:
+            if orient_w:
+                reasons.append(orient_w)
+            if warn and not sheet_w and not fb_w and not orient_w:
                 reasons.append(warn)
             if erased_qs:
                 reasons.append(f"Vết tẩy xóa (Câu: {', '.join(str(q) for q in erased_qs)})")

@@ -85,6 +85,82 @@ def calculate_binary_iou_dice(mask1: np.ndarray, mask2: np.ndarray) -> Tuple[flo
     return round(iou, 4), round(dice, 4)
 
 
+def calculate_ccl_component_iou(
+    labels_sc: np.ndarray,
+    labels_cv: np.ndarray,
+    num_sc: Optional[int] = None,
+    num_cv: Optional[int] = None,
+) -> Tuple[float, float]:
+    """Calculate component-level mean IoU and Dice between two CCL label maps (pure NumPy)."""
+    if labels_sc.shape != labels_cv.shape:
+        raise ValueError(f"Shape mismatch: {labels_sc.shape} vs {labels_cv.shape}")
+
+    l_sc = np.asarray(labels_sc, dtype=np.int64)
+    l_cv = np.asarray(labels_cv, dtype=np.int64)
+    max_sc = int(l_sc.max())
+    max_cv = int(l_cv.max())
+
+    if max_sc == 0 and max_cv == 0:
+        return 1.0, 1.0
+    if max_sc == 0 or max_cv == 0:
+        return 0.0, 0.0
+
+    area_sc = np.bincount(l_sc.ravel(), minlength=max_sc + 1)
+    area_cv = np.bincount(l_cv.ravel(), minlength=max_cv + 1)
+    k_sc = int(np.sum(area_sc[1:] > 0)) if num_sc is None else int(num_sc)
+    k_cv = int(np.sum(area_cv[1:] > 0)) if num_cv is None else int(num_cv)
+    if k_sc == 0 and k_cv == 0:
+        return 1.0, 1.0
+    if k_sc == 0 or k_cv == 0:
+        return 0.0, 0.0
+
+    fg_mask = (l_sc > 0) & (l_cv > 0)
+    if not np.any(fg_mask):
+        return 0.0, 0.0
+
+    sc_fg = l_sc[fg_mask]
+    cv_fg = l_cv[fg_mask]
+    stride = np.int64(max_cv + 1)
+    pairs = sc_fg * stride + cv_fg
+    uniq_pairs, inter_counts = np.unique(pairs, return_counts=True)
+
+    u_sc = uniq_pairs // stride
+    u_cv = uniq_pairs % stride
+    a_s = area_sc[u_sc].astype(np.float64)
+    a_c = area_cv[u_cv].astype(np.float64)
+    inter_f = inter_counts.astype(np.float64)
+    pair_iou = inter_f / (a_s + a_c - inter_f)
+    pair_dice = (2.0 * inter_f) / (a_s + a_c)
+
+    denom = float(max(k_sc, k_cv))
+    if len(uniq_pairs) <= 20000:
+        # Exact greedy 1-to-1 component matching prevents split labels from inflating score
+        order = np.argsort(-pair_iou)
+        used_sc = set()
+        used_cv = set()
+        sum_iou = 0.0
+        sum_dice = 0.0
+        max_matches = min(k_sc, k_cv)
+        for idx in order:
+            s_id = int(u_sc[idx])
+            c_id = int(u_cv[idx])
+            if s_id in used_sc or c_id in used_cv:
+                continue
+            used_sc.add(s_id)
+            used_cv.add(c_id)
+            sum_iou += float(pair_iou[idx])
+            sum_dice += float(pair_dice[idx])
+            if len(used_sc) >= max_matches:
+                break
+        return round(sum_iou / denom, 4), round(sum_dice / denom, 4)
+
+    best_iou = np.zeros(max_sc + 1, dtype=np.float64)
+    best_dice = np.zeros(max_sc + 1, dtype=np.float64)
+    np.maximum.at(best_iou, u_sc, pair_iou)
+    np.maximum.at(best_dice, u_sc, pair_dice)
+    return round(float(best_iou[1:].sum()) / denom, 4), round(float(best_dice[1:].sum()) / denom, 4)
+
+
 def calculate_otsu_delta_t(t_scratch: float, t_opencv: float) -> float:
     """Absolute difference between Scratch and OpenCV Otsu threshold values (Delta T = |T*_sc - T*_cv|)."""
     return round(abs(float(t_scratch) - float(t_opencv)), 4)
@@ -213,12 +289,14 @@ def benchmark_all_modules(image: np.ndarray) -> List[Dict[str, Any]]:
                 pass
 
     has_tv3 = False
+    two_pass_ccl_scratch = None
     try:
         from .tv3_segmentation import (
             otsu_threshold_scratch,
             adaptive_mean_threshold_scratch,
             morphology_open_scratch,
             morphology_close_scratch,
+            two_pass_ccl_scratch,
         )
         has_tv3 = True
     except ImportError:
@@ -233,6 +311,7 @@ def benchmark_all_modules(image: np.ndarray) -> List[Dict[str, Any]]:
                 adaptive_mean_threshold_scratch,
                 opening_binary_scratch as morphology_open_scratch,
                 closing_binary_scratch as morphology_close_scratch,
+                two_pass_ccl_scratch,
             )
             has_tv3 = True
         except ImportError:
@@ -359,9 +438,11 @@ def benchmark_all_modules(image: np.ndarray) -> List[Dict[str, Any]]:
         })
 
         if match_template_ncc is not None and h >= 30 and w >= 30:
-            anchor = np.zeros((30, 30), dtype=np.uint8)
-            anchor[5:25, 5:25] = 245
-            anchor[11:19, 11:19] = 0
+            try:
+                from .tv4_filters import create_anchor_marker_template
+            except ImportError:
+                from tv4_filters import create_anchor_marker_template
+            anchor = create_anchor_marker_template(30)
             mh = max(30, int(h * 0.25))
             mw = max(30, int(w * 0.25))
             roi_tr = gray[0:mh, max(0, w - mw):w]
@@ -451,6 +532,30 @@ def benchmark_all_modules(image: np.ndarray) -> List[Dict[str, Any]]:
             "time_opencv_ms": round(t_cv, 3),
         })
 
+        if two_pass_ccl_scratch is not None:
+            t0 = time.perf_counter()
+            k_sc, lbl_sc, _ = two_pass_ccl_scratch(open_sc, connectivity=8)
+            t_sc = (time.perf_counter() - t0) * 1000.0
+            t0 = time.perf_counter()
+            k_cv_raw, lbl_cv, _, _ = cv2.connectedComponentsWithStats(open_sc, connectivity=8)
+            t_cv = (time.perf_counter() - t0) * 1000.0
+            k_cv = max(0, int(k_cv_raw) - 1)
+            iou_ccl, dice_ccl = calculate_ccl_component_iou(lbl_sc, lbl_cv, int(k_sc), k_cv)
+            fg_sc = (lbl_sc > 0).astype(np.uint8) * 255
+            fg_cv = (lbl_cv > 0).astype(np.uint8) * 255
+            results.append({
+                "module": "Phân hệ 3 (Phân đoạn)",
+                "algorithm": "Two-Pass CCL (8-Connectivity)",
+                "metric_type": "binary",
+                "mse": round(calculate_mse(fg_sc, fg_cv), 4),
+                "psnr_db": round(calculate_psnr(fg_sc, fg_cv), 2),
+                "iou": iou_ccl,
+                "dice": dice_ccl,
+                "delta_t": abs(int(k_sc) - k_cv),
+                "time_scratch_ms": round(t_sc, 3),
+                "time_opencv_ms": round(t_cv, 3),
+            })
+
     # 8. TV4: Histogram Equalization & Median Filter (Always tested)
     try:
         from .tv4_filters import benchmark_hist_equalization, benchmark_median_filter
@@ -513,41 +618,54 @@ def _compute_bubble_ratios_from_binary(
     total_questions: int = 20,
     question_grid: Optional[Dict[int, Dict[str, Tuple[float, float]]]] = None,
     bubble_radius: Optional[int] = None,
+    question_ids: Optional[List[int]] = None,
 ) -> Tuple[Dict[int, Dict[str, float]], Dict[int, Dict[str, float]]]:
-    """Compute unrounded and rounded bubble fill ratios on a binary mask."""
+    """Compute unrounded and rounded bubble fill ratios on a binary mask using sub-pixel circle geometry."""
     h, w = binary_img.shape[:2]
-    questions_per_col = (total_questions + 1) // 2
+    if question_ids is not None:
+        q_ids = list(question_ids)
+    elif question_grid is not None:
+        q_ids = sorted(question_grid.keys())
+    else:
+        q_ids = list(range(1, total_questions + 1))
+
+    n_q = len(q_ids) if q_ids else total_questions
+    questions_per_col = (n_q + 1) // 2
     if bubble_radius is None:
         bubble_radius = int(min(w, h) * 0.018)
-    inner_radius = max(bubble_radius - 2, 4)
-    yy, xx = np.ogrid[-inner_radius:inner_radius + 1, -inner_radius:inner_radius + 1]
-    circle_mask = (xx ** 2 + yy ** 2) <= (inner_radius ** 2)
-    mask_area = float(np.sum(circle_mask))
+    inner_radius = float(max(bubble_radius - 2, 4))
+    r_int = int(np.ceil(inner_radius))
 
     def_start_y, def_end_y = int(h * 0.16), int(h * 0.89)
     def_col1_x, def_col2_x = int(w * 0.13), int(w * 0.57)
-    def_row_height = (def_end_y - def_start_y) / float(questions_per_col)
+    def_row_height = (def_end_y - def_start_y) / float(max(1, questions_per_col))
 
     raw_ratios_dict: Dict[int, Dict[str, float]] = {}
     rounded_ratios_dict: Dict[int, Dict[str, float]] = {}
-    for q in range(1, total_questions + 1):
+    for idx, q in enumerate(q_ids):
         q_raw: Dict[str, float] = {}
         q_round: Dict[str, float] = {}
         for opt_idx, opt in enumerate(["A", "B", "C", "D"]):
             if question_grid is not None and q in question_grid and opt in question_grid[q]:
                 center_x, center_y = question_grid[q][opt]
-                center_x, center_y = int(round(center_x)), int(round(center_y))
+                cx_f, cy_f = float(center_x), float(center_y)
             else:
-                row_idx = (q - 1) if q <= questions_per_col else (q - 1 - questions_per_col)
-                base_x = def_col1_x if q <= questions_per_col else def_col2_x
-                center_y = int(def_start_y + (row_idx + 0.5) * def_row_height)
-                center_x = int(base_x + (opt_idx + 1) * (bubble_radius * 2.8))
+                row_idx = idx if idx < questions_per_col else (idx - questions_per_col)
+                base_x = def_col1_x if idx < questions_per_col else def_col2_x
+                cy_f = float(def_start_y + (row_idx + 0.5) * def_row_height)
+                cx_f = float(base_x + (opt_idx + 1) * (bubble_radius * 2.8))
 
-            y1, y2 = center_y - inner_radius, center_y + inner_radius + 1
-            x1, x2 = center_x - inner_radius, center_x + inner_radius + 1
-            if y1 >= 0 and y2 <= h and x1 >= 0 and x2 <= w:
-                roi = binary_img[y1:y2, x1:x2]
-                ratio = float(np.sum((roi == 255) & circle_mask)) / mask_area
+            x_min = max(0, int(np.floor(cx_f - r_int)))
+            x_max = min(w, int(np.ceil(cx_f + r_int + 1)))
+            y_min = max(0, int(np.floor(cy_f - r_int)))
+            y_max = min(h, int(np.ceil(cy_f + r_int + 1)))
+            if x_min < x_max and y_min < y_max:
+                patch = binary_img[y_min:y_max, x_min:x_max]
+                ph_p, pw_p = patch.shape
+                yg, xg = np.ogrid[:ph_p, :pw_p]
+                local_mask = ((xg - (cx_f - x_min)) ** 2 + (yg - (cy_f - y_min)) ** 2) <= (inner_radius ** 2)
+                total_px = int(np.sum(local_mask))
+                ratio = float(np.sum((patch > 127) & local_mask)) / float(total_px) if total_px > 0 else 0.0
             else:
                 ratio = 0.0
             q_raw[opt] = ratio
@@ -564,7 +682,8 @@ def _extract_bubble_answers_from_binary(
     fill_threshold: float = 0.38,
     delta_tau_min: float = 0.15,
     question_grid: Optional[Dict[int, Dict[str, Tuple[float, float]]]] = None,
-    bubble_radius: Optional[int] = None
+    bubble_radius: Optional[int] = None,
+    question_ids: Optional[List[int]] = None,
 ) -> Tuple[Dict[int, str], Dict[int, Dict[str, float]]]:
     """Helper for evaluating bubble fills on any binary image.
     Supports dynamically resolved question_grid and applies delta_tau rule for erasure parity with main pipeline.
@@ -574,6 +693,7 @@ def _extract_bubble_answers_from_binary(
         total_questions=total_questions,
         question_grid=question_grid,
         bubble_radius=bubble_radius,
+        question_ids=question_ids,
     )
     ans_dict: Dict[int, str] = {
         q: _classify_question_from_ratios(q_raw, fill_threshold, delta_tau_min)
@@ -591,7 +711,7 @@ def run_ablation_study(
 ) -> Dict[str, Any]:
     """Run Ablation Study (Section 6.2):
     1. Compare Global Otsu vs Adaptive Mean Thresholding on the sheet (using unified pipeline params).
-    2. Survey fill_threshold tau_min in {0.25, 0.30, 0.35, 0.38, 0.45, 0.50}.
+    2. Survey fill_threshold tau_min in {0.25, 0.30, 0.35, 0.38, 0.45, 0.50} with FP/FN counts.
     """
     import cv2
 
@@ -637,7 +757,8 @@ def run_ablation_study(
             "threshold_survey": [],
         }
 
-    total_q = len(ground_truth_answers)
+    gt_q_ids = sorted(int(k) for k in ground_truth_answers.keys())
+    total_q = len(gt_q_ids)
 
     # Auto resolve grid & bubble radius if not provided to match pipeline behavior
     if question_grid is None or bubble_radius is None:
@@ -646,7 +767,9 @@ def run_ablation_study(
                 from .pipeline_coordinator import _resolve_bubble_grid
             except ImportError:
                 from pipeline_coordinator import _resolve_bubble_grid
-            resolved_grid, resolved_radius = _resolve_bubble_grid(warped_gray, total_q, use_scratch=True)
+            resolved_grid, resolved_radius = _resolve_bubble_grid(
+                warped_gray, total_q, use_scratch=True, question_ids=gt_q_ids
+            )
             if question_grid is None:
                 question_grid = resolved_grid
             if bubble_radius is None:
@@ -670,7 +793,11 @@ def run_ablation_study(
         otsu_clean = cv2.morphologyEx(otsu_bin, cv2.MORPH_OPEN, kernel3)
 
     raw_ratios_adap, _ = _compute_bubble_ratios_from_binary(
-        adap_clean, total_questions=total_q, question_grid=question_grid, bubble_radius=bubble_radius
+        adap_clean,
+        total_questions=total_q,
+        question_grid=question_grid,
+        bubble_radius=bubble_radius,
+        question_ids=gt_q_ids,
     )
     ans_adap = {
         q: _classify_question_from_ratios(q_raw, 0.38, 0.15)
@@ -679,12 +806,17 @@ def run_ablation_study(
     acc_adap = calculate_mark_accuracy(ans_adap, ground_truth_answers)
 
     ans_otsu, _ = _extract_bubble_answers_from_binary(
-        otsu_clean, total_q, fill_threshold=0.38, delta_tau_min=0.15,
-        question_grid=question_grid, bubble_radius=bubble_radius
+        otsu_clean,
+        total_q,
+        fill_threshold=0.38,
+        delta_tau_min=0.15,
+        question_grid=question_grid,
+        bubble_radius=bubble_radius,
+        question_ids=gt_q_ids,
     )
     acc_otsu = calculate_mark_accuracy(ans_otsu, ground_truth_answers)
 
-    # Part B: Survey fill_threshold tau_min with delta_tau erasure rule on unrounded ratios
+    # Part B: Survey fill_threshold tau_min with delta_tau erasure rule + FP/FN accounting
     tau_survey = []
     for tau in thresholds:
         ans_t = {
@@ -692,11 +824,26 @@ def run_ablation_study(
             for q, q_raw in raw_ratios_adap.items()
         }
         acc_t = calculate_mark_accuracy(ans_t, ground_truth_answers)
+        fp_count = 0
+        fn_count = 0
+        for q in ground_truth_answers:
+            gt_norm = _normalize_mark_value(ground_truth_answers[q])
+            pred_raw = ans_t.get(q, ans_t.get(int(q) if str(q).isdigit() else q, "BLANK"))
+            pred_norm = _normalize_mark_value(pred_raw)
+            if pred_norm != gt_norm:
+                if (gt_norm in VALID_OMR_OPTIONS and pred_norm == "BLANK") or (
+                    gt_norm == "MULTIPLE" and pred_norm != "MULTIPLE"
+                ):
+                    fn_count += 1
+                else:
+                    fp_count += 1
         tau_survey.append({
             "fill_threshold": tau,
             "mark_accuracy_pct": acc_t,
             "blank_count": sum(1 for v in ans_t.values() if v == "BLANK"),
             "multiple_count": sum(1 for v in ans_t.values() if v == "MULTIPLE"),
+            "fp_count": fp_count,
+            "fn_count": fn_count,
         })
 
     return {

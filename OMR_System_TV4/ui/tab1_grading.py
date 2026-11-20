@@ -208,6 +208,7 @@ def render_tab1(
             st.success(f"Đã hoàn tất chấm hàng loạt {len(results_list)} bài thi.")
             sheet_warnings = [r for r in results_list if r.get("sheet_warning")]
             fb_warnings = [r for r in results_list if r.get("fallback_warning")]
+            orient_warnings = [r for r in results_list if r.get("orientation_warning") and "Cảnh báo" in r["orientation_warning"]]
             if sheet_warnings:
                 st.warning(
                     f"Cảnh báo cấu trúc: Có {len(sheet_warnings)}/{len(results_list)} bài thi có số câu trên ảnh không khớp với file đáp án."
@@ -215,6 +216,10 @@ def render_tab1(
             if fb_warnings:
                 st.warning(
                     f"Cảnh báo Fallback: Có {len(fb_warnings)}/{len(results_list)} bài thi phải chuyển sang OpenCV Baseline."
+                )
+            if orient_warnings:
+                st.warning(
+                    f"Cảnh báo định hướng NCC: Có {len(orient_warnings)}/{len(results_list)} bài thi không tìm thấy Anchor Marker tin cậy ở tỷ lệ ngang."
                 )
             summary_rows = []
             for r in results_list:
@@ -228,14 +233,15 @@ def render_tab1(
                     "Phạm Quy (>1 ô)": g["multiple_count"],
                     "Thời gian xử lý (ms)": f"{r['latencies']['total_pipeline_ms']:.1f}"
                 }
-                has_sw = bool(r.get("sheet_warning"))
-                has_fw = bool(r.get("fallback_warning"))
-                if has_sw and has_fw:
-                    row_data["Cảnh báo"] = "Lệch số câu đề thi | Fallback OpenCV"
-                elif has_sw:
-                    row_data["Cảnh báo"] = "Lệch số câu đề thi"
-                elif has_fw:
-                    row_data["Cảnh báo"] = "Fallback OpenCV"
+                warn_tags = []
+                if r.get("sheet_warning"):
+                    warn_tags.append("Lệch số câu đề thi")
+                if r.get("fallback_warning"):
+                    warn_tags.append("Fallback OpenCV")
+                if r.get("orientation_warning") and "Cảnh báo" in r["orientation_warning"]:
+                    warn_tags.append("Không rõ Anchor NCC")
+                if warn_tags:
+                    row_data["Cảnh báo"] = " | ".join(warn_tags)
                 elif r.get("warning"):
                     row_data["Cảnh báo"] = r["warning"]
                 summary_rows.append(row_data)
@@ -247,6 +253,8 @@ def render_tab1(
                     tags.append(" [Lệch đề]")
                 if results_list[i].get("fallback_warning"):
                     tags.append(" [Fallback]")
+                if results_list[i].get("orientation_warning") and "Cảnh báo" in results_list[i]["orientation_warning"]:
+                    tags.append(" [NCC]")
                 return f"{results_list[i]['student_id']} — Điểm: {results_list[i]['grading_result']['score_10']}/10{''.join(tags)}"
 
             selected_idx = st.selectbox(
@@ -264,11 +272,17 @@ def render_tab1(
 
         sheet_w = active_res.get("sheet_warning")
         fb_w = active_res.get("fallback_warning")
+        orient_w = active_res.get("orientation_warning")
         if sheet_w:
             st.error(sheet_w)
         if fb_w:
             st.warning(fb_w)
-        if not sheet_w and not fb_w and active_res.get("warning"):
+        if orient_w:
+            if "Cảnh báo" in orient_w:
+                st.warning(orient_w)
+            else:
+                st.info(orient_w)
+        if not sheet_w and not fb_w and not orient_w and active_res.get("warning"):
             st.error(active_res["warning"])
 
         st.caption(
@@ -356,8 +370,9 @@ def render_tab1(
             if erased_qs:
                 st.info(f"Lưu ý: Câu {', '.join(str(q) for q in erased_qs)} có vết tẩy xóa đã được thuật toán tự động giải mã theo luật chênh lệch độ đậm Δτ ≥ 0.15.")
             ov_col1, ov_col2, ov_col3 = st.columns([2, 2, 1], vertical_alignment="bottom")
+            q_choices = [d["question"] for d in gr["details"]] or list(range(1, gr["total_questions"] + 1))
             with ov_col1:
-                q_to_edit = st.selectbox("Chọn câu hỏi cần chỉnh sửa:", list(range(1, gr["total_questions"] + 1)), key="tab1_override_q")
+                q_to_edit = st.selectbox("Chọn câu hỏi cần chỉnh sửa:", q_choices, key="tab1_override_q")
             curr_det = next((d for d in gr["details"] if d["question"] == q_to_edit), None)
             curr_choice = curr_det["student_ans"] if curr_det else "BLANK"
             opt_choices = ["A", "B", "C", "D", "BLANK", "MULTIPLE"]
@@ -387,6 +402,8 @@ def render_tab1(
                         updated_gr["sheet_warning"] = active_res["sheet_warning"]
                     if active_res.get("fallback_warning"):
                         updated_gr["fallback_warning"] = active_res["fallback_warning"]
+                    if active_res.get("orientation_warning"):
+                        updated_gr["orientation_warning"] = active_res["orientation_warning"]
                     vis_base = cv2.cvtColor(active_res["warped_gray"], cv2.COLOR_GRAY2BGR)
                     updated_img = pipeline._annotate_sheet_results(
                         vis_base,
@@ -422,7 +439,7 @@ def render_tab1(
         st.download_button(
             label=f"Tải Bảng Điểm Excel ({len(st.session_state.tab1_processed_items)} Sinh Viên) (.xlsx)",
             data=excel_bytes,
-            file_name="Ket_Qua_Cham_Thi_OMR.xlsx",
+            file_name="Ket_Qua_Cham_Thi.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
     else:

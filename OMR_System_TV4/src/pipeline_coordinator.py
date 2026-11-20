@@ -16,12 +16,14 @@ try:
     from .tv4_enhancement_eval import (
         histogram_equalization_scratch,
         median_filter_scratch,
+        create_anchor_marker_template,
         OMRGrader
     )
 except (ImportError, ValueError):
     from tv4_enhancement_eval import (
         histogram_equalization_scratch,
         median_filter_scratch,
+        create_anchor_marker_template,
         OMRGrader
     )
 
@@ -168,14 +170,6 @@ def _order_corners(pts: np.ndarray) -> np.ndarray:
     return np.array([tl, tr, br, bl], dtype=np.float32)
 
 
-def create_anchor_marker_template(size: int = 30) -> np.ndarray:
-    """Create canonical rotation-invariant concentric square TR anchor marker template (2D uint8)."""
-    anchor = np.zeros((size, size), dtype=np.uint8)
-    anchor[5:size - 5, 5:size - 5] = 245
-    anchor[11:size - 11, 11:size - 11] = 0
-    return anchor
-
-
 def _detect_orientation_cv(
     warped_gray: np.ndarray,
     anchor_template: np.ndarray,
@@ -212,7 +206,7 @@ def _rectify_with_orientation(
     target_height: int = 1000,
     use_scratch: bool = True,
     anchor_template: Optional[np.ndarray] = None,
-) -> Tuple[np.ndarray, int, List[Tuple[str, float]]]:
+) -> Tuple[np.ndarray, int, List[Tuple[str, float]], Optional[str]]:
     """Rectify sheet perspective and normalize 0/90/180/270 deg orientation via NCC anchor matching."""
     gh, gw = gray.shape[:2]
     full_frame = np.array([[0, 0], [gw - 1, 0], [gw - 1, gh - 1], [0, gh - 1]], dtype=np.float32)
@@ -256,8 +250,22 @@ def _rectify_with_orientation(
     sorted_scores = sorted((s for _, s in marker_scores), reverse=True)
     top1 = sorted_scores[0] if len(sorted_scores) >= 1 else -1.0
     top2 = sorted_scores[1] if len(sorted_scores) >= 2 else -1.0
-    if top1 < 0.72 or (top1 - top2) < 0.15:
+    margin = top1 - top2
+    orientation_warning: Optional[str] = None
+    if top1 < 0.72 or margin < 0.15:
         detected_angle = 0
+        if preview_size != (target_width, target_height):
+            orientation_warning = (
+                f"Cảnh báo định hướng NCC: Không phát hiện chắc chắn Anchor Marker "
+                f"(top1={top1:.2f}, margin={margin:.2f}) trong khi ảnh đang ở tỷ lệ ngang "
+                f"{preview_size[0]}x{preview_size[1]}. Hệ thống giữ nguyên góc 0° và co giãn về "
+                f"{target_width}x{target_height}; kết quả chấm có thể sai lệch nếu phiếu bị xoay 90°/270°!"
+            )
+        else:
+            orientation_warning = (
+                f"Lưu ý định hướng NCC: Không phát hiện Anchor Marker đồng tâm tin cậy "
+                f"(top1={top1:.2f}, margin={margin:.2f}). Hệ thống giữ nguyên hướng 0° mặc định."
+            )
 
     if detected_angle != 0:
         if corners_for_angle is not None:
@@ -265,11 +273,11 @@ def _rectify_with_orientation(
         else:
             corrected_pts = np.roll(ordered_pts, -(detected_angle // 90), axis=0)
         warped = _warp_ordered(corrected_pts, (target_width, target_height))
-        return warped, detected_angle, marker_scores
+        return warped, detected_angle, marker_scores, None
 
     if preview_size == (target_width, target_height):
-        return preview, 0, marker_scores
-    return _warp_ordered(ordered_pts, (target_width, target_height)), 0, marker_scores
+        return preview, 0, marker_scores, orientation_warning
+    return _warp_ordered(ordered_pts, (target_width, target_height)), 0, marker_scores, orientation_warning
 
 
 def _detect_sheet_corners_cv(image: np.ndarray) -> np.ndarray:
@@ -343,42 +351,34 @@ def _detect_sheet_corners_cv(image: np.ndarray) -> np.ndarray:
     return np.array([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]], dtype=np.float32)
 
 
-def _warp_perspective_cv(image: np.ndarray, corners: np.ndarray, target_width: int = 800, target_height: int = 1000) -> np.ndarray:
-    """Baseline perspective warping using OpenCV."""
-    pts = np.asarray(corners, dtype=np.float32).reshape(4, 2)
-    y_sorted = pts[np.argsort(pts[:, 1])]
-    tl, tr = y_sorted[:2][np.argsort(y_sorted[:2, 0])]
-    bl, br = y_sorted[2:][np.argsort(y_sorted[2:, 0])]
-    rect = np.array([tl, tr, br, bl], dtype=np.float32)
-    dst = np.array([[0, 0], [target_width - 1, 0], [target_width - 1, target_height - 1], [0, target_height - 1]], dtype=np.float32)
-    matrix = cv2.getPerspectiveTransform(rect, dst)
-    return cv2.warpPerspective(image, matrix, (target_width, target_height))
-
-
 def extract_candidate_bubbles(
     warped_gray: np.ndarray,
     use_scratch: bool = True
 ) -> List[Tuple[float, float]]:
     """Extract candidate bubble centroids from rectified exam sheet.
-    Reused across question count detection and bubble grid resolution to avoid duplicate CCL runs.
+    Crops vertically to the question ROI band on full-size sheets to skip dense header text in CCL.
     """
     if warped_gray is None or warped_gray.size == 0:
         return []
     h, w = warped_gray.shape[:2]
+    y_start = int(0.11 * h) if h >= 200 else 0
+    y_end = int(0.92 * h) if h >= 200 else h
+    roi_gray = warped_gray[y_start:y_end, :]
 
     bubbles = []
     if use_scratch and adaptive_mean_threshold_scratch is not None and two_pass_ccl_scratch is not None:
-        thresh = adaptive_mean_threshold_scratch(warped_gray, block_size=31, C=15.0)
+        thresh = adaptive_mean_threshold_scratch(roi_gray, block_size=31, C=15.0)
         _, _, raw_stats = two_pass_ccl_scratch(thresh, connectivity=8)
         for s in raw_stats:
             bw, bh = s["bbox"][2], s["bbox"][3]
             if (80 <= s["area"] <= 1500 and 0.65 <= s["aspect_ratio"] <= 1.55
                 and 14 <= bw <= 50 and 14 <= bh <= 50 and s["extent"] >= 0.20):
-                bubbles.append(s["centroid"])
+                cx, cy = s["centroid"]
+                bubbles.append((float(cx), float(cy + y_start)))
     else:
         # Extract bubble candidates via OpenCV connectedComponentsWithStats with aligned params
         thresh = cv2.adaptiveThreshold(
-            warped_gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 31, 15
+            roi_gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 31, 15
         )
         num_labels, _, stats_cv, cents_cv = cv2.connectedComponentsWithStats(thresh, connectivity=8)
         for k in range(1, num_labels):
@@ -389,7 +389,7 @@ def extract_candidate_bubbles(
                 aspect = float(bw) / float(max(1, bh))
                 extent = float(area) / float(max(1, bw * bh))
                 if 0.65 <= aspect <= 1.55 and extent >= 0.20:
-                    bubbles.append((float(cents_cv[k, 0]), float(cents_cv[k, 1])))
+                    bubbles.append((float(cents_cv[k, 0]), float(cents_cv[k, 1] + y_start)))
 
     return [b for b in bubbles if 0.05 * h <= b[1] <= 0.95 * h]
 
@@ -398,7 +398,8 @@ def _resolve_bubble_grid(
     warped_gray: np.ndarray,
     total_questions: int = 20,
     use_scratch: bool = True,
-    candidate_bubbles: Optional[List[Tuple[float, float]]] = None
+    candidate_bubbles: Optional[List[Tuple[float, float]]] = None,
+    question_ids: Optional[List[int]] = None,
 ) -> Tuple[Dict[int, Dict[str, Tuple[float, float]]], int]:
     """Dynamically resolve bubble grid coordinates for any exam sheet.
 
@@ -409,7 +410,9 @@ def _resolve_bubble_grid(
     In Scratch mode, candidate bubble extraction runs 100% from scratch via TV3's adaptive threshold & CCL.
     """
     h, w = warped_gray.shape[:2]
-    questions_per_col = (total_questions + 1) // 2
+    q_ids = list(question_ids) if question_ids else list(range(1, total_questions + 1))
+    total_questions = len(q_ids)
+    questions_per_col = max(1, (total_questions + 1) // 2)
 
     # Standard template baseline parameters
     def_start_y = int(h * 0.16)
@@ -547,9 +550,9 @@ def _resolve_bubble_grid(
 
     options = ["A", "B", "C", "D"]
     grid: Dict[int, Dict[str, Tuple[float, float]]] = {}
-    for q in range(1, total_questions + 1):
-        row_idx = (q - 1) if q <= questions_per_col else (q - 1 - questions_per_col)
-        base_x = col1_x if q <= questions_per_col else col2_x
+    for idx, q in enumerate(q_ids):
+        row_idx = idx if idx < questions_per_col else (idx - questions_per_col)
+        base_x = col1_x if idx < questions_per_col else col2_x
         if row_exact_ys is not None:
             cy = row_exact_ys[row_idx]
         else:
@@ -631,27 +634,29 @@ def _extract_bubble_answers_cv(
 
     if bubble_radius is None:
         bubble_radius = int(min(w, h) * 0.018)
-    inner_radius = max(bubble_radius - 2, 4)
-
-    yy, xx = np.ogrid[-inner_radius:inner_radius + 1, -inner_radius:inner_radius + 1]
-    circle_mask = (xx ** 2 + yy ** 2) <= (inner_radius ** 2)
-    mask_area = float(np.sum(circle_mask))
+    inner_radius = float(max(bubble_radius - 2, 4))
+    r_int = int(np.ceil(inner_radius))
 
     if question_grid is None:
         question_grid, _ = _resolve_bubble_grid(warped_gray, total_questions, use_scratch=False)
 
-    for q in range(1, total_questions + 1):
+    for q in sorted(question_grid.keys()):
         q_ratios_raw: Dict[str, float] = {}
         q_ratios: Dict[str, float] = {}
         for opt in options:
             center_x, center_y = question_grid[q][opt]
-            cx, cy = int(round(center_x)), int(round(center_y))
-            y1, y2 = cy - inner_radius, cy + inner_radius + 1
-            x1, x2 = cx - inner_radius, cx + inner_radius + 1
-            if y1 >= 0 and y2 <= h and x1 >= 0 and x2 <= w:
-                roi = binary[y1:y2, x1:x2]
-                filled = float(np.sum((roi == 255) & circle_mask))
-                ratio = filled / mask_area
+            cx_f, cy_f = float(center_x), float(center_y)
+            x_min = max(0, int(np.floor(cx_f - r_int)))
+            x_max = min(w, int(np.ceil(cx_f + r_int + 1)))
+            y_min = max(0, int(np.floor(cy_f - r_int)))
+            y_max = min(h, int(np.ceil(cy_f + r_int + 1)))
+            if x_min < x_max and y_min < y_max:
+                patch = binary[y_min:y_max, x_min:x_max]
+                ph_p, pw_p = patch.shape
+                yg, xg = np.ogrid[:ph_p, :pw_p]
+                local_mask = ((xg - (cx_f - x_min)) ** 2 + (yg - (cy_f - y_min)) ** 2) <= (inner_radius ** 2)
+                total_px = int(np.sum(local_mask))
+                ratio = float(np.sum((patch > 127) & local_mask)) / float(total_px) if total_px > 0 else 0.0
             else:
                 ratio = 0.0
             q_ratios_raw[opt] = ratio
@@ -751,7 +756,7 @@ class OMRPipeline:
         else:
             corners = _detect_sheet_corners_cv(gray)
 
-        warped_gray, detected_angle, marker_scores = _rectify_with_orientation(
+        warped_gray, detected_angle, marker_scores, orientation_warning = _rectify_with_orientation(
             gray,
             corners,
             target_width=800,
@@ -775,7 +780,8 @@ class OMRPipeline:
 
         # Detect physical sheet question count and check structure mismatch
         detected_q = detect_sheet_questions(warped_gray, use_scratch=use_scratch_mode, candidate_bubbles=candidate_bubbles)
-        total_q = len(self.grader.answer_key) if self.grader.answer_key else (detected_q if detected_q > 0 else 20)
+        key_q_ids = sorted(self.grader.answer_key.keys()) if self.grader.answer_key else None
+        total_q = len(key_q_ids) if key_q_ids else (detected_q if detected_q > 0 else 20)
 
         sheet_warning = None
         if detected_q > 0 and self.grader.answer_key and abs(detected_q - total_q) >= 4:
@@ -786,7 +792,13 @@ class OMRPipeline:
             )
 
         # Dynamically resolve question bubble grid (adaptive to custom uploads or standard template)
-        grid, b_radius = _resolve_bubble_grid(warped_gray, total_q, use_scratch=use_scratch_mode, candidate_bubbles=candidate_bubbles)
+        grid, b_radius = _resolve_bubble_grid(
+            warped_gray,
+            total_q,
+            use_scratch=use_scratch_mode,
+            candidate_bubbles=candidate_bubbles,
+            question_ids=key_q_ids,
+        )
 
         answers = None
         ratios = None
@@ -839,12 +851,19 @@ class OMRPipeline:
                 if use_scratch_mode:
                     actual_mode = "Fallback (OpenCV Baseline)"
                     fallback_warning = f"Lỗi nhánh Scratch: {exc}. Hệ thống đã tự động kích hoạt Fallback sang OpenCV Baseline."
+                else:
+                    actual_mode = "Fallback (OpenCV Nội Bộ)"
+                    fallback_warning = f"Lỗi module TV3 (chế độ OpenCV): {exc}. Hệ thống đã chuyển sang nhánh OpenCV dự phòng của TV4."
                 answers = None
 
         if answers is None:
-            if use_scratch_mode and not fallback_warning:
-                actual_mode = "Fallback (OpenCV Baseline)"
-                fallback_warning = "Không tìm thấy module TV3 Scratch. Đã tự động kích hoạt Fallback sang OpenCV Baseline."
+            if not fallback_warning:
+                if use_scratch_mode:
+                    actual_mode = "Fallback (OpenCV Baseline)"
+                    fallback_warning = "Không tìm thấy module TV3 Scratch. Đã tự động kích hoạt Fallback sang OpenCV Baseline."
+                else:
+                    actual_mode = "Fallback (OpenCV Nội Bộ)"
+                    fallback_warning = "Không tìm thấy module TV3. Đã chuyển sang nhánh OpenCV dự phòng của TV4."
             answers, ratios, vis_warped, cv_erased = _extract_bubble_answers_cv(
                 warped_gray,
                 total_questions=total_q,
@@ -882,9 +901,10 @@ class OMRPipeline:
                 ],
                 "erased_questions": list(erased_questions.keys()) if erased_questions else []
             }
-        combined_warning = sheet_warning
-        if fallback_warning:
-            combined_warning = f"{fallback_warning} | {sheet_warning}" if sheet_warning else fallback_warning
+        warning_parts = [w_str for w_str in (fallback_warning, sheet_warning) if w_str]
+        if orientation_warning and "Cảnh báo định hướng NCC" in orientation_warning:
+            warning_parts.append(orientation_warning)
+        combined_warning = " | ".join(warning_parts) if warning_parts else None
 
         if combined_warning:
             grading_result["warning"] = combined_warning
@@ -893,6 +913,8 @@ class OMRPipeline:
             grading_result["sheet_warning"] = sheet_warning
         if fallback_warning:
             grading_result["fallback_warning"] = fallback_warning
+        if orientation_warning:
+            grading_result["orientation_warning"] = orientation_warning
 
         annotated_image = self._annotate_sheet_results(
             vis_warped,
@@ -915,6 +937,7 @@ class OMRPipeline:
             "corners": corners,
             "detected_angle": detected_angle,
             "marker_scores": marker_scores,
+            "orientation_warning": orientation_warning,
             "warped_gray": warped_gray,
             "question_grid": grid,
             "bubble_radius": b_radius,

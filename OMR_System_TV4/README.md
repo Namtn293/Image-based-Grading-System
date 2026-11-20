@@ -83,15 +83,16 @@ OMR_System_TV4/
 │   ├── sample_matrix.csv         # File ma trận mức xám 60x60
 │   ├── sample_matrix_15x15.csv   # File ma trận mức xám 15x15 có nhiễu muối tiêu
 │   ├── sample_matrix_low_contrast.csv # File ma trận 15x15 tương phản thấp [55-95]
-│   └── samples/                  # Bộ 5 ảnh phiếu thi mẫu (DS-01..DS-05) kèm file *_gt.csv
+│   ├── ablation/                 # Dữ liệu khảo sát FP/FN với bút chì nhạt & tẩy xóa nhiều mức
+│   └── samples/                  # Bộ 5 ảnh phiếu thi mẫu (DS-01..DS-05), *_gt.csv & corners_gt.csv
 ├── outputs/                      # Thư mục kết quả xuất bởi run_demo.py (ignored git)
 │   ├── Ket_Qua_Cham_Thi.xlsx     # File Excel kết quả chấm bài thi tổng hợp
 │   ├── sample_matrix_filtered.csv
 │   └── sample_sheet_graded.png
 ├── src/                          # Thư mục mã nguồn thuật toán (Modular Architecture)
 │   ├── __init__.py               # Package init & re-export
-│   ├── tv4_filters.py            # Thuật toán Scratch: Median Filter & Histogram Equalization
-│   ├── tv4_metrics.py            # Bộ đo đạc định lượng: MSE, PSNR, IoU, Dice, Delta T, Ablation
+│   ├── tv4_filters.py            # Thuật toán Scratch: Median Filter, HistEq & Anchor Template
+│   ├── tv4_metrics.py            # Bộ đo lường định lượng: MSE, PSNR, IoU, CCL IoU, Ablation FP/FN
 │   ├── tv4_grader.py             # Logic chấm điểm OMR, Ma trận CSV & Xuất báo cáo Excel
 │   ├── tv4_enhancement_eval.py   # Facade module (Đảm bảo tương thích ngược 100%)
 │   └── pipeline_coordinator.py   # Luồng điều phối tích hợp toàn hệ thống (TV1 -> TV4 + NCC)
@@ -99,12 +100,12 @@ OMR_System_TV4/
 │   ├── __init__.py               # Package UI init
 │   ├── styles.py                 # Hệ thống CSS Light SaaS, read_image_unicode & Matplotlib
 │   ├── tab1_grading.py           # Tab 1: Chấm bài trắc nghiệm & Giám sát Human-in-the-Loop
-│   ├── tab2_stepper.py           # Tab 2: Stepper kiểm thử từng bước Pipeline liên hoàn
-│   ├── tab3_benchmark.py         # Tab 3: Đối chứng Triplet View & Khảo sát Ablation
-│   └── tab4_statistics.py        # Tab 4: Thống kê KPI, biểu đồ phổ điểm & tỷ lệ làm đúng
+│   ├── tab2_stepper.py           # Tab 2: Stepper kiểm thử từng bước (hỗ trợ cả Ảnh & Ma trận CSV)
+│   ├── tab3_benchmark.py         # Tab 3: Đối chứng Triplet View (gồm Two-Pass CCL) & Ablation FP/FN
+│   └── tab4_statistics.py        # Tab 4: Thống kê KPI, biểu đồ phổ điểm & danh sách cảnh báo
 └── tests/                        # Bộ kiểm thử tự động của Module 4
     ├── __init__.py
-    └── test_tv4_algorithms.py    # 24 Unit Tests kiểm thử toàn diện
+    └── test_tv4_algorithms.py    # 30 Unit Tests kiểm thử toàn diện
 ```
 
 ---
@@ -116,16 +117,16 @@ OMR_System_TV4/
 pip install -r requirements.txt
 ```
 
-### Bước 2: Chạy bộ kiểm thử tự động (24 Unit Tests)
+### Bước 2: Chạy bộ kiểm thử tự động (30 Unit Tests)
 ```powershell
 python -m unittest discover -s tests -v
 ```
-Toàn bộ 24 bài kiểm thử bao phủ toàn diện:
+Toàn bộ 30 bài kiểm thử bao phủ toàn diện:
 - Tính đúng đắn toán học của Cân bằng sáng CDF và Lọc trung vị (không phụ thuộc OpenCV).
 - Đọc/ghi ma trận CSV dạng số học với các trường hợp dữ liệu bất thường.
 - Logic tính điểm thang 10, phân loại ô tô, cảnh báo bỏ trống / tô phạm quy / vết tẩy xóa $\Delta\tau$.
-- Định vị Anchor Marker bằng NCC và chuẩn hóa xoay phiếu $0^\circ / 90^\circ / 180^\circ / 270^\circ$.
-- Cơ chế tự động phát hiện lệch cấu trúc câu hỏi giữa ảnh phiếu thi và file đáp án.
+- Định vị Anchor Marker bằng NCC, cảnh báo khi NCC không chắc chắn trên phiếu không Anchor, và chuẩn hóa xoay phiếu $0^\circ / 90^\circ / 180^\circ / 270^\circ$.
+- Cơ chế tự động phát hiện lệch cấu trúc câu hỏi giữa ảnh phiếu thi và file đáp án, đối chứng Two-Pass CCL, sai số 4 góc $E_{\text{corner}}$ so với Ground Truth và khảo sát $\tau_{\min}$ FP/FN.
 - Kiểm thử tích hợp trọn vẹn luồng Pipeline qua 5 kịch bản ảnh thực tế.
 
 ### Bước 3: Chạy nghiệm thu CLI & xuất báo cáo Excel

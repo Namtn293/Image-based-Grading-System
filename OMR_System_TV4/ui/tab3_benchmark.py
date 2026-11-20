@@ -33,17 +33,19 @@ try:
         otsu_threshold_scratch,
         adaptive_mean_threshold_scratch
     )
-    from tv3_morphology_ccl import opening_binary_scratch
+    from tv3_morphology_ccl import opening_binary_scratch, two_pass_ccl_scratch
 except ImportError:
     otsu_threshold_scratch = None
     adaptive_mean_threshold_scratch = None
     opening_binary_scratch = None
+    two_pass_ccl_scratch = None
 
 from tv4_enhancement_eval import (
     calculate_mse,
     calculate_psnr,
     calculate_difference_map,
     calculate_binary_iou_dice,
+    calculate_ccl_component_iou,
     benchmark_hist_equalization,
     benchmark_median_filter,
     benchmark_all_modules,
@@ -116,6 +118,7 @@ def render_tab3(
                     "[Phân đoạn] Phân ngưỡng Otsu toàn cục (Otsu Global Threshold)",
                     "[Phân đoạn] Phân ngưỡng thích nghi (Adaptive Mean Threshold)",
                     "[Phân đoạn] Phép mở hình thái học (Morphology Opening 3x3)",
+                    "[Phân đoạn] Gán nhãn thành phần liên thông (Two-Pass CCL 8-lân cận)",
                     "[Cải thiện ảnh] Cân bằng biểu đồ mức xám (Histogram Equalization)",
                     "[Khử nhiễu] Bộ lọc trung vị khử nhiễu (Median Filter 2D)"
                 ], index=2, key="sb1_algo")
@@ -303,6 +306,54 @@ def render_tab3(
                     amp = 1.0
                     iou_val, dice_val = calculate_binary_iou_dice(out_sc, out_cv)
 
+                elif "CCL" in bench_algo:
+                    adap_m = (
+                        adaptive_mean_threshold_scratch(gray_bench, block_size=51, C=42.0)
+                        if adaptive_mean_threshold_scratch is not None
+                        else cv2.adaptiveThreshold(gray_bench, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 51, 42)
+                    )
+                    open_m = (
+                        opening_binary_scratch(adap_m)
+                        if opening_binary_scratch is not None
+                        else cv2.morphologyEx(adap_m, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+                    )
+                    k_sc, lbl_sc, k_cv, lbl_cv = 0, np.zeros_like(open_m, dtype=np.int32), 0, np.zeros_like(open_m, dtype=np.int32)
+                    for _ in range(2):
+                        t0 = time.perf_counter()
+                        if two_pass_ccl_scratch is not None:
+                            k_sc, lbl_sc, _ = two_pass_ccl_scratch(open_m, connectivity=8)
+                        else:
+                            k_sc_r, lbl_sc, _, _ = cv2.connectedComponentsWithStats(open_m, connectivity=8)
+                            k_sc = max(0, int(k_sc_r) - 1)
+                        t_sc_list.append((time.perf_counter() - t0) * 1000.0)
+                        t0 = time.perf_counter()
+                        k_cv_r, lbl_cv, _, _ = cv2.connectedComponentsWithStats(open_m, connectivity=8)
+                        t_cv_list.append((time.perf_counter() - t0) * 1000.0)
+                        k_cv = max(0, int(k_cv_r) - 1)
+
+                    iou_val, dice_val = calculate_ccl_component_iou(lbl_sc, lbl_cv, int(k_sc), k_cv)
+                    out_sc = (lbl_sc > 0).astype(np.uint8) * 255
+                    out_cv = (lbl_cv > 0).astype(np.uint8) * 255
+                    rng = np.random.default_rng(42)
+                    palette = rng.integers(60, 255, size=(max(int(k_sc), k_cv) + 2, 3), dtype=np.uint8)
+                    palette[0] = [0, 0, 0]
+                    vis_sc = palette[np.clip(lbl_sc, 0, len(palette) - 1)]
+                    # Map OpenCV labels to overlapping Scratch label color so identical regions share identical colors
+                    cv_to_sc = np.arange(len(palette), dtype=np.int64)
+                    fg_overlap = (lbl_sc > 0) & (lbl_cv > 0)
+                    if np.any(fg_overlap):
+                        stride = np.int64(k_cv + 1)
+                        u_pairs = np.unique(lbl_sc[fg_overlap].astype(np.int64) * stride + lbl_cv[fg_overlap].astype(np.int64))
+                        for pair_val in u_pairs:
+                            s_lbl = int(pair_val // stride)
+                            c_lbl = int(pair_val % stride)
+                            if 0 < c_lbl < len(cv_to_sc):
+                                cv_to_sc[c_lbl] = s_lbl
+                    cv_mapped = cv_to_sc[np.clip(lbl_cv, 0, len(cv_to_sc) - 1)]
+                    vis_cv = palette[np.clip(cv_mapped, 0, len(palette) - 1)]
+                    amp = 1.0
+                    st.info(f"Two-Pass CCL (8-lân cận): Scratch = {k_sc} thành phần | OpenCV = {k_cv} thành phần (Chênh lệch ΔK = {abs(int(k_sc) - k_cv)}).")
+
                 elif "Histogram" in bench_algo:
                     st.session_state.tab3_result = benchmark_hist_equalization(gray_bench, iterations=3)
 
@@ -360,16 +411,16 @@ def render_tab3(
             with tc1:
                 with st.container(border=True):
                     st.markdown("###### 1. Thuật Toán Tự Cài Đặt (NumPy)")
-                    st.image(b_res["img_scratch"], use_container_width=True, channels="GRAY")
+                    st.image(b_res["img_scratch"], use_container_width=True, channels="RGB" if b_res["img_scratch"].ndim == 3 else "GRAY")
             with tc2:
                 with st.container(border=True):
                     st.markdown("###### 2. Thư Viện OpenCV Chuẩn (C++)")
-                    st.image(b_res["img_opencv"], use_container_width=True, channels="GRAY")
+                    st.image(b_res["img_opencv"], use_container_width=True, channels="RGB" if b_res["img_opencv"].ndim == 3 else "GRAY")
             with tc3:
                 with st.container(border=True):
                     amp_factor = b_res.get("amplify", 10.0)
                     st.markdown(f"###### 3. Bản Đồ Sai Khác (x{amp_factor:.0f})")
-                    st.image(b_res["diff_map"], use_container_width=True, channels="GRAY")
+                    st.image(b_res["diff_map"], use_container_width=True, channels="RGB" if b_res["diff_map"].ndim == 3 else "GRAY")
         else:
             st.write("")
             with st.container(border=True):
@@ -461,13 +512,14 @@ def render_tab3(
                     "PSNR (dB)": f"{r['psnr_db']:.2f}",
                     "IoU (%)": iou_str,
                     "Dice": dice_str,
-                    "ΔT / Corner Err": dt_str,
+                    "ΔT / ΔK / Corner Err": dt_str,
                     "Scratch (ms)": f"{r['time_scratch_ms']:.2f}",
                     "OpenCV (ms)": f"{r['time_opencv_ms']:.2f}",
                     "Đánh giá": pass_check
                 })
             df_bm = pd.DataFrame(rows)
             st.dataframe(df_bm, use_container_width=True)
+            st.caption("Ghi chú cột ΔT / ΔK / Corner Err: Otsu = chênh lệch ngưỡng ΔT; Two-Pass CCL = chênh lệch số thành phần ΔK; Corner Detection = sai số đỉnh Euclidean (px).")
             if not review_algos:
                 st.success("Tất cả thuật toán đều đạt chuẩn toán học tương đương OpenCV (MSE < 1.0, PSNR > 48 dB, IoU ≥ 98.5%, Sai số góc ≤ 3.0 px).")
             else:
@@ -476,13 +528,17 @@ def render_tab3(
     with sub_t3:
         st.markdown("###### Khảo Sát Tham Số & Độ Nhạy (Ablation Study)")
 
-        abl_src_map = {
-            "Kịch bản 5: Bóng đổ & Chiếu sáng không đều (Khuyến nghị)": os.path.join(samples_dir, "05_B21DCCN005_BongDo_ChieuSangKhongDeu.png"),
-            "Kịch bản 4: Tô sai quy chế & Vết tẩy xóa (Khảo sát tau_min)": os.path.join(samples_dir, "04_B21DCCN004_ToSaiQuyChe_TayXoa.png"),
+        ablation_stress_path = os.path.join(os.path.dirname(samples_dir), "ablation", "ablation_faint_pencil_erasure.png")
+        abl_src_map = {}
+        if os.path.exists(ablation_stress_path):
+            abl_src_map["Kịch bản chuyên sâu: Bút chì nhạt + Vết tẩy xóa nhiều mức (Khảo sát FP/FN theo tau_min)"] = ablation_stress_path
+        abl_src_map.update({
+            "Kịch bản 5: Bóng đổ & Chiếu sáng không đều (Otsu vs Adaptive)": os.path.join(samples_dir, "05_B21DCCN005_BongDo_ChieuSangKhongDeu.png"),
+            "Kịch bản 4: Tô sai quy chế & Vết tẩy xóa (Khảo sát Δτ)": os.path.join(samples_dir, "04_B21DCCN004_ToSaiQuyChe_TayXoa.png"),
             "Kịch bản 3: Thiếu sáng & Nhiễu hạt": os.path.join(samples_dir, "03_B21DCCN003_ThieuSang_NhieuHat.png"),
             "Kịch bản 2: Chụp nghiêng trên bàn tối": os.path.join(samples_dir, "02_B21DCCN002_Nghieng_BanToi.png"),
             "Kịch bản 1: Phiếu chuẩn": os.path.join(samples_dir, "01_B21DCCN001_Chuan.png"),
-        }
+        })
         abl_src = st.selectbox("Chọn ảnh phiếu làm bài để khảo sát:", list(abl_src_map.keys()), key="sb3_src")
         p_abl = abl_src_map[abl_src]
 
@@ -549,25 +605,42 @@ def render_tab3(
                     s_rows.append({
                         "Ngưỡng diện tích tô (tau_min)": f"{tau:.2f}{is_opt}",
                         "Độ chính xác nhận diện (%)": f"{item['mark_accuracy_pct']:.1f}%",
+                        "Số lỗi FP (Tẩy xóa / Tô nhầm)": item.get("fp_count", 0),
+                        "Số lỗi FN (Bỏ sót tô nhạt)": item.get("fn_count", 0),
                         "Số câu bỏ trống (Blank)": item["blank_count"],
                         "Số câu phạm quy (Multiple)": item["multiple_count"]
                     })
                 df_surv = pd.DataFrame(s_rows)
                 st.dataframe(df_surv, use_container_width=True)
 
-                # Accuracy curve plot with modern styling
-                fig_abl, ax_abl = plt.subplots(figsize=(7, 3.2), dpi=130)
+                # Accuracy & FP/FN tradeoff curves with modern styling
+                fig_abl, (ax_acc, ax_err) = plt.subplots(1, 2, figsize=(10.5, 3.3), dpi=130)
                 apply_modern_chart_style(
-                    ax_abl,
-                    title="Biến thiên Độ chính xác theo Ngưỡng tô tau_min",
-                    xlabel="Ngưỡng tô đậm (Fill Ratio tau)",
-                    ylabel="Độ chính xác nhận diện (%)"
+                    ax_acc,
+                    title="Biến thiên Độ chính xác theo tau_min",
+                    xlabel="Ngưỡng tô đậm (tau_min)",
+                    ylabel="Độ chính xác (%)"
                 )
                 taus = [it["fill_threshold"] for it in surv]
                 accs = [it["mark_accuracy_pct"] for it in surv]
-                ax_abl.plot(taus, accs, marker="o", color="#2563EB", linewidth=2.4, markersize=6, label="Độ chính xác (%)")
-                ax_abl.axvline(0.38, color="#EF4444", linestyle="--", alpha=0.85, linewidth=1.5, label="Ngưỡng tối ưu tau=0.38")
-                ax_abl.set_ylim(min(accs) - 10 if min(accs) > 10 else 0, 105)
-                ax_abl.legend(loc="lower left", frameon=False, fontsize=9)
+                fps = [it.get("fp_count", 0) for it in surv]
+                fns = [it.get("fn_count", 0) for it in surv]
+                ax_acc.plot(taus, accs, marker="o", color="#2563EB", linewidth=2.4, markersize=6, label="Độ chính xác (%)")
+                ax_acc.axvline(0.38, color="#EF4444", linestyle="--", alpha=0.85, linewidth=1.5, label="Ngưỡng tối ưu 0.38")
+                ax_acc.set_ylim(min(accs) - 10 if min(accs) > 10 else 0, 105)
+                ax_acc.legend(loc="lower left", frameon=False, fontsize=8.5)
+
+                apply_modern_chart_style(
+                    ax_err,
+                    title="Đánh đổi Lỗi FP (Tẩy xóa) vs FN (Bỏ sót nhạt)",
+                    xlabel="Ngưỡng tô đậm (tau_min)",
+                    ylabel="Số câu lỗi (câu)"
+                )
+                ax_err.plot(taus, fps, marker="s", color="#F59E0B", linewidth=2.2, markersize=6, label="Lỗi dương giả (FP)")
+                ax_err.plot(taus, fns, marker="^", color="#EF4444", linewidth=2.2, markersize=6, label="Lỗi âm giả (FN)")
+                ax_err.axvline(0.38, color="#10B981", linestyle="--", alpha=0.85, linewidth=1.5, label="Cân bằng tối ưu 0.38")
+                ax_err.set_ylim(bottom=0, top=max(fps + fns + [2]) + 1)
+                ax_err.legend(loc="upper center", frameon=False, fontsize=8.5)
+                plt.tight_layout()
                 st.pyplot(fig_abl)
                 plt.close(fig_abl)

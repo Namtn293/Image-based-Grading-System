@@ -270,6 +270,19 @@ def median_filter_scratch(
         return np.partition(neighbors, median_idx, axis=0)[median_idx].copy()
 
 
+def create_anchor_marker_template(size: int = 30) -> np.ndarray:
+    """Create canonical rotation-invariant concentric square TR anchor marker template (2D uint8)."""
+    if not isinstance(size, (int, np.integer)) or isinstance(size, bool) or int(size) < 15:
+        raise ValueError(f"Anchor marker template size must be an integer >= 15, got {size}")
+    size = int(size)
+    outer_margin = max(1, int(round(size * (5.0 / 30.0))))
+    inner_margin = max(outer_margin + 1, int(round(size * (11.0 / 30.0))))
+    anchor = np.zeros((size, size), dtype=np.uint8)
+    anchor[outer_margin:size - outer_margin, outer_margin:size - outer_margin] = 245
+    anchor[inner_margin:size - inner_margin, inner_margin:size - inner_margin] = 0
+    return anchor
+
+
 # ==============================================================================
 # 3. BENCHMARK HOÀN CHỈNH CHO PHÂN HỆ 4
 # ==============================================================================

@@ -30,6 +30,8 @@ from tv4_enhancement_eval import (
     benchmark_hist_equalization,
     benchmark_median_filter,
     benchmark_all_modules,
+    calculate_corner_error,
+    run_ablation_study,
     OMRGrader
 )
 from pipeline_coordinator import OMRPipeline
@@ -90,13 +92,14 @@ def main():
     # ---------------------------------------------------------
     print_header("2B. DOI CHUNG TOAN BO HE THONG: CODE SCRATCH VS OPENCV (TV1 - TV4)")
     all_bm = benchmark_all_modules(test_bgr)
-    print(f"{'Module':26s} | {'Thuat toan':34s} | {'MSE':8s} | {'PSNR (dB)':9s} | {'IoU (%)':8s} | {'Scratch (ms)':12s} | {'OpenCV (ms)':11s}")
-    print("-" * 124)
+    print(f"{'Module':26s} | {'Thuat toan':34s} | {'MSE':8s} | {'PSNR (dB)':9s} | {'IoU (%)':8s} | {'dT/dK/Err':9s} | {'Scratch (ms)':12s} | {'OpenCV (ms)':11s}")
+    print("-" * 136)
     for row in all_bm:
         iou_str = f"{row['iou']*100:.1f}%" if row["iou"] is not None else "—"
+        dt_str = f"{row['delta_t']}" if row.get("delta_t") is not None else "—"
         print(
             f"{row['module']:26s} | {row['algorithm']:34s} | {row['mse']:8.4f} | "
-            f"{row['psnr_db']:9.2f} | {iou_str:8s} | {row['time_scratch_ms']:12.2f} | {row['time_opencv_ms']:11.2f}"
+            f"{row['psnr_db']:9.2f} | {iou_str:8s} | {dt_str:9s} | {row['time_scratch_ms']:12.2f} | {row['time_opencv_ms']:11.2f}"
         )
 
     # ---------------------------------------------------------
@@ -174,6 +177,41 @@ def main():
     excel_path = os.path.join(outputs_dir, "Ket_Qua_Cham_Thi.xlsx")
     OMRGrader.generate_excel_report(batch_results, excel_path)
     print(f"[*] Da xuat bao cao ket qua {len(batch_results)} bai thi ra file Excel: {excel_path} [PASS]")
+
+    # ---------------------------------------------------------
+    # 5. CORNER ERROR VS GROUND TRUTH (DS-02) & ABLATION FP/FN
+    # ---------------------------------------------------------
+    corners_gt_path = os.path.join(samples_dir, "02_B21DCCN002_Nghieng_BanToi_corners_gt.csv")
+    s2_path = os.path.join(samples_dir, "02_B21DCCN002_Nghieng_BanToi.png")
+    if os.path.exists(corners_gt_path) and os.path.exists(s2_path):
+        print_header("5. KIEM CHUNG SAI SO 4 GOC VS GROUND TRUTH (DS-02) & KHAO SAT ABLATION FP/FN")
+        df_c = pd.read_csv(corners_gt_path)
+        gt_corners = df_c[["x", "y"]].values.astype(np.float32)
+        s2_img = cv2.imread(s2_path)
+        r_sc = pipeline.process_sheet(s2_img, "SV-02", use_scratch_mode=True)
+        r_cv = pipeline.process_sheet(s2_img, "SV-02", use_scratch_mode=False)
+        err_sc = calculate_corner_error(r_sc["corners"], gt_corners)
+        err_cv = calculate_corner_error(r_cv["corners"], gt_corners)
+        print(f"[*] E_corner vs Ground Truth (02_Nghieng_BanToi): Scratch = {err_sc:.2f} px | OpenCV = {err_cv:.2f} px")
+
+    abl_img_path = os.path.join(data_dir, "ablation", "ablation_faint_pencil_erasure.png")
+    abl_gt_path = os.path.join(data_dir, "ablation", "ablation_faint_pencil_erasure_gt.csv")
+    if os.path.exists(abl_img_path) and os.path.exists(abl_gt_path):
+        df_abl = pd.read_csv(abl_gt_path)
+        gt_abl = dict(zip(df_abl.iloc[:, 0].astype(int), df_abl.iloc[:, 1].astype(str).str.strip()))
+        out_abl = pipeline.process_sheet(cv2.imread(abl_img_path), "ABL01", use_scratch_mode=True)
+        ab_res = run_ablation_study(
+            out_abl["warped_gray"], gt_abl,
+            question_grid=out_abl["question_grid"], bubble_radius=out_abl["bubble_radius"]
+        )
+        print("\n[*] Bang khao sat do nhay nguong tau_min (ablation_faint_pencil_erasure.png):")
+        print(f"    {'tau_min':8s} | {'Acc (%)':8s} | {'FP':4s} | {'FN':4s} | {'Blank':5s} | {'Multiple':8s}")
+        print("    " + "-" * 50)
+        for row in ab_res["threshold_survey"]:
+            print(
+                f"    {row['fill_threshold']:8.2f} | {row['mark_accuracy_pct']:7.1f}% | "
+                f"{row['fp_count']:4d} | {row['fn_count']:4d} | {row['blank_count']:5d} | {row['multiple_count']:8d}"
+            )
 
     print_header("TAT CA THI NGHIEM MODULE TV4 DA HOAN TAT VA CHINH XAC 100%!")
 

@@ -1,21 +1,22 @@
-"""Generate synthetic sample sheets (5 realistic scenarios: DS-01 to DS-05) and CSV matrices for OMR testing."""
+"""Generate synthetic sample sheets (5 realistic scenarios: DS-01 to DS-05), corner GT, and ablation sheets."""
 import os
+import sys
 import numpy as np
 import cv2
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = os.path.join(BASE_DIR, "src")
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
+
+from tv4_filters import create_anchor_marker_template
+
 DATA_DIR = os.path.join(BASE_DIR, "data")
 SAMPLES_DIR = os.path.join(DATA_DIR, "samples")
+ABLATION_DIR = os.path.join(DATA_DIR, "ablation")
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(SAMPLES_DIR, exist_ok=True)
-
-
-def create_anchor_marker_template(size: int = 30) -> np.ndarray:
-    """Create a rotation-invariant concentric square anchor marker (2D uint8) for the TR corner."""
-    anchor = np.zeros((size, size), dtype=np.uint8)
-    anchor[5:size - 5, 5:size - 5] = 245
-    anchor[11:size - 11, 11:size - 11] = 0
-    return anchor
+os.makedirs(ABLATION_DIR, exist_ok=True)
 
 
 def create_base_omr_sheet(student_id: str, student_fill: dict, erased_marks: dict = None) -> np.ndarray:
@@ -103,7 +104,101 @@ def create_base_omr_sheet(student_id: str, student_fill: dict, erased_marks: dic
     return sheet
 
 
-def save_groundtruth_csv(filename: str, fill_dict: dict):
+def save_corners_gt_csv(filename: str, corners: np.ndarray):
+    """Save 4 ground-truth sheet corner coordinates (TL, TR, BR, BL) to CSV for E_corner verification."""
+    corner_names = ["TL", "TR", "BR", "BL"]
+    lines = ["corner,x,y"]
+    for name, pt in zip(corner_names, np.asarray(corners, dtype=np.float32).reshape(4, 2)):
+        lines.append(f"{name},{float(pt[0]):.2f},{float(pt[1]):.2f}")
+    path = os.path.join(SAMPLES_DIR, filename)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"Generated {path}")
+
+
+def create_ablation_faint_erasure_sheet(student_id: str, student_fill: dict) -> np.ndarray:
+    """Create a stress-test OMR sheet with faint HB pencil fills and multi-level erasure smudges for tau_min ablation."""
+    sheet = np.full((1000, 800, 3), 245, dtype=np.uint8)
+    cv2.rectangle(sheet, (36, 62), (764, 942), (20, 20, 20), 3)
+
+    cv2.rectangle(sheet, (44, 70), (74, 100), (0, 0, 0), -1)
+    anchor_tr = create_anchor_marker_template(30)
+    sheet[70:100, 726:756] = anchor_tr[:, :, np.newaxis]
+    cv2.rectangle(sheet, (726, 904), (756, 934), (0, 0, 0), -1)
+    cv2.rectangle(sheet, (44, 904), (74, 934), (0, 0, 0), -1)
+
+    cv2.putText(
+        sheet, "PHIEU TRA LOI TRAC NGHIEM (KHAO SAT TAU)",
+        (115, 102), cv2.FONT_HERSHEY_SIMPLEX, 0.70, (10, 10, 10), 2, cv2.LINE_AA
+    )
+    cv2.putText(
+        sheet, f"Thi sinh: {student_id}   |   Ma de: 101",
+        (115, 132), cv2.FONT_HERSHEY_SIMPLEX, 0.56, (30, 30, 30), 2, cv2.LINE_AA
+    )
+
+    options = ["A", "B", "C", "D"]
+    start_y = int(1000 * 0.16)
+    end_y = int(1000 * 0.89)
+    col1_x = int(800 * 0.13)
+    col2_x = int(800 * 0.57)
+    row_height = (end_y - start_y) / 10.0
+    radius = int(min(800, 1000) * 0.018)
+
+    # Partial faint pencil fills inside inner_radius=12 px (expected tau ~0.41-0.47 -> passes tau=0.38, fails tau>=0.45/0.50 as FN)
+    faint_marks = {
+        2: ("C", (8, 7), 15),
+        7: ("C", (8, 7), -20),
+        13: ("A", (9, 7), 0),
+        18: ("B", (9, 8), 10),
+    }
+    # Erased-blank & erased-before-remarked smudges (expected tau ~0.27-0.33 -> triggers FP at tau=0.25/0.30, clean at 0.38)
+    erasure_residues = {
+        5: ("C", (7, 6), 20),   # Re-marked A lightly (~0.41) below -> triggers MULTIPLE at tau<=0.30, VALID at 0.38
+        10: ("B", (6, 6), -15), # Left BLANK (~0.27 -> FP at tau=0.25)
+        14: ("A", (7, 6), 25),  # Re-marked C cleanly (~0.99 -> delta_tau resolves across all tau)
+        20: ("D", (7, 6), 10),  # Left BLANK (~0.32 -> FP at tau=0.25 and tau=0.30)
+    }
+
+    for q in range(1, 21):
+        row_idx = (q - 1) if q <= 10 else (q - 11)
+        base_x = col1_x if q <= 10 else col2_x
+        center_y = int(start_y + (row_idx + 0.5) * row_height)
+        cv2.putText(
+            sheet, f"Q{q:02d}:",
+            (base_x - 52, center_y + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (15, 15, 15), 2, cv2.LINE_AA
+        )
+
+        ans_val = student_fill.get(q)
+        marked_opts = [ans_val] if isinstance(ans_val, str) else (list(ans_val) if isinstance(ans_val, (list, tuple, set)) else [])
+
+        for opt_idx, opt in enumerate(options):
+            center_x = int(base_x + (opt_idx + 1) * (radius * 2.8))
+
+            if q in erasure_residues and erasure_residues[q][0] == opt:
+                _, axes, ang = erasure_residues[q]
+                cv2.circle(sheet, (center_x, center_y), radius - 2, (218, 218, 218), -1)
+                cv2.ellipse(sheet, (center_x, center_y), axes, ang, 0, 360, (55, 55, 55), -1)
+
+            cv2.circle(sheet, (center_x, center_y), radius, (55, 55, 55), 2, cv2.LINE_AA)
+            cv2.putText(
+                sheet, opt,
+                (center_x - 5, center_y + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (190, 190, 190), 1, cv2.LINE_AA
+            )
+
+            if opt in marked_opts:
+                if q in faint_marks and faint_marks[q][0] == opt:
+                    _, axes_f, ang_f = faint_marks[q]
+                    cv2.ellipse(sheet, (center_x, center_y), axes_f, ang_f, 0, 360, (45, 45, 45), -1)
+                elif q == 5 and opt == "A":
+                    # Partial valid re-mark (~0.41): triggers MULTIPLE (FP) at tau=0.25/0.30 vs erased C (~0.32), VALID at 0.38, FN at 0.45+
+                    cv2.ellipse(sheet, (center_x, center_y), (8, 7), 0, 0, 360, (45, 45, 45), -1)
+                else:
+                    cv2.circle(sheet, (center_x, center_y), radius - 2, (25, 25, 25), -1)
+
+    return sheet
+
+
+def save_groundtruth_csv(filename: str, fill_dict: dict, target_dir: str = SAMPLES_DIR):
     """Save ground-truth answer key CSV for a sample sheet scenario."""
     lines = ["question_id,ground_truth_answer"]
     for q in sorted(fill_dict.keys()):
@@ -115,7 +210,7 @@ def save_groundtruth_csv(filename: str, fill_dict: dict):
         else:
             ans_str = str(val)
         lines.append(f"{q},{ans_str}")
-    path = os.path.join(SAMPLES_DIR, filename)
+    path = os.path.join(target_dir, filename)
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     print(f"Generated {path}")
@@ -181,6 +276,7 @@ def main():
     )
     cv2.imwrite(os.path.join(SAMPLES_DIR, "02_B21DCCN002_Nghieng_BanToi.png"), sheet2_tilted)
     save_groundtruth_csv("02_B21DCCN002_Nghieng_BanToi_gt.csv", fill_sv2)
+    save_corners_gt_csv("02_B21DCCN002_Nghieng_BanToi_corners_gt.csv", dst_quad)
 
     # 5. Scenario 3 (DS-04): Low-light + Salt-and-Pepper Noise (B21DCCN003 - Score 8.0/10: 16 correct, 3 wrong, 1 blank)
     fill_sv3 = {
@@ -234,7 +330,18 @@ def main():
     cv2.imwrite(os.path.join(SAMPLES_DIR, "05_B21DCCN005_BongDo_ChieuSangKhongDeu.png"), sheet5_shadow)
     save_groundtruth_csv("05_B21DCCN005_BongDo_ChieuSangKhongDeu_gt.csv", fill_sv5)
 
-    print("Successfully generated all 5 sample scenarios (DS-01 to DS-05) in data/samples/!")
+    # 8. Dedicated Ablation Stress Sheet (Light HB pencil + multiple erasure intensities for tau_min FP/FN survey)
+    fill_ablation = {
+        1: 'A', 2: 'C', 3: 'B', 4: 'D', 5: 'A',
+        6: 'B', 7: 'C', 8: 'D', 9: 'A', 10: None,
+        11: 'B', 12: 'D', 13: 'A', 14: 'C', 15: 'B',
+        16: 'D', 17: 'A', 18: 'B', 19: 'C', 20: None,
+    }
+    sheet_abl = create_ablation_faint_erasure_sheet("ABLATION01", fill_ablation)
+    cv2.imwrite(os.path.join(ABLATION_DIR, "ablation_faint_pencil_erasure.png"), sheet_abl)
+    save_groundtruth_csv("ablation_faint_pencil_erasure_gt.csv", fill_ablation, target_dir=ABLATION_DIR)
+
+    print("Successfully generated all 5 sample scenarios (DS-01 to DS-05), corner GT, and ablation sheet!")
 
 
 if __name__ == "__main__":

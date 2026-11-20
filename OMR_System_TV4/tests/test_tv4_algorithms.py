@@ -21,6 +21,7 @@ try:
     from tv4_enhancement_eval import (
         histogram_equalization_scratch,
         median_filter_scratch,
+        create_anchor_marker_template,
         _pad_2d_scratch,
         save_matrix_to_csv,
         load_matrix_from_csv,
@@ -28,6 +29,7 @@ try:
         calculate_psnr,
         calculate_difference_map,
         calculate_binary_iou_dice,
+        calculate_ccl_component_iou,
         calculate_otsu_delta_t,
         calculate_corner_error,
         calculate_mark_accuracy,
@@ -37,30 +39,42 @@ try:
         run_ablation_study,
         OMRGrader
     )
-    from pipeline_coordinator import OMRPipeline, _resolve_bubble_grid, detect_sheet_questions
+    from pipeline_coordinator import (
+        OMRPipeline,
+        _resolve_bubble_grid,
+        detect_sheet_questions,
+        create_anchor_marker_template as coord_anchor_template,
+    )
 except ImportError:
     if SRC_DIR not in sys.path:
         sys.path.insert(0, SRC_DIR)
-    from tv4_enhancement_eval import (
-        histogram_equalization_scratch,
-        median_filter_scratch,
-        _pad_2d_scratch,
-        save_matrix_to_csv,
-        load_matrix_from_csv,
-        calculate_mse,
-        calculate_psnr,
-        calculate_difference_map,
-        calculate_binary_iou_dice,
-        calculate_otsu_delta_t,
-        calculate_corner_error,
-        calculate_mark_accuracy,
-        benchmark_hist_equalization,
-        benchmark_median_filter,
-        benchmark_all_modules,
-        run_ablation_study,
-        OMRGrader
-    )
-    from pipeline_coordinator import OMRPipeline, _resolve_bubble_grid, detect_sheet_questions
+from tv4_enhancement_eval import (
+    histogram_equalization_scratch,
+    median_filter_scratch,
+    create_anchor_marker_template,
+    _pad_2d_scratch,
+    save_matrix_to_csv,
+    load_matrix_from_csv,
+    calculate_mse,
+    calculate_psnr,
+    calculate_difference_map,
+    calculate_binary_iou_dice,
+    calculate_ccl_component_iou,
+    calculate_otsu_delta_t,
+    calculate_corner_error,
+    calculate_mark_accuracy,
+    benchmark_hist_equalization,
+    benchmark_median_filter,
+    benchmark_all_modules,
+    run_ablation_study,
+    OMRGrader
+)
+from pipeline_coordinator import (
+    OMRPipeline,
+    _resolve_bubble_grid,
+    detect_sheet_questions,
+    create_anchor_marker_template as coord_anchor_template,
+)
 
 
 class TestTV4Algorithms(unittest.TestCase):
@@ -545,6 +559,150 @@ class TestTV4Algorithms(unittest.TestCase):
         )
         self.assertEqual(ab5["adaptive_accuracy_pct"], 100.0)
         self.assertLess(ab5["otsu_accuracy_pct"], ab5["adaptive_accuracy_pct"])
+
+    def test_anchor_marker_single_source_of_truth(self):
+        """Verify create_anchor_marker_template is shared identically without duplication."""
+        self.assertIs(create_anchor_marker_template, coord_anchor_template)
+        tmpl = create_anchor_marker_template(30)
+        self.assertEqual(tmpl.shape, (30, 30))
+        self.assertEqual(int(tmpl[0, 0]), 0)
+        self.assertEqual(int(tmpl[6, 6]), 245)
+        self.assertEqual(int(tmpl[15, 15]), 0)
+
+    def test_benchmark_all_modules_includes_ccl_and_ncc(self):
+        """Verify benchmark_all_modules benchmarks both Two-Pass CCL and NCC alongside TV1-TV4."""
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        sheet = cv2.imread(os.path.join(base_dir, "data", "sample_sheet.png"))
+        rows = benchmark_all_modules(sheet)
+        algos = {r["algorithm"]: r for r in rows}
+
+        self.assertIn("Two-Pass CCL (8-Connectivity)", algos)
+        ccl_row = algos["Two-Pass CCL (8-Connectivity)"]
+        self.assertGreaterEqual(ccl_row["iou"], 0.985)
+        self.assertEqual(ccl_row["delta_t"], 0)
+
+        self.assertIn("Template Matching NCC (30x30)", algos)
+        self.assertLess(algos["Template Matching NCC (30x30)"]["mse"], 1.0)
+
+        # Standalone component IoU check
+        m1 = np.array([[1, 1, 0], [1, 0, 0], [0, 0, 2]], dtype=np.int32)
+        m2 = np.array([[5, 5, 0], [5, 0, 0], [0, 0, 3]], dtype=np.int32)
+        self.assertEqual(calculate_ccl_component_iou(m1, m2), (1.0, 1.0))
+
+    def test_orientation_warning_on_uncertain_ncc_and_landscape(self):
+        """Verify orientation_warning is None with anchor, warns on missing anchor, and flags landscape mismatch."""
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        key_path = os.path.join(base_dir, "data", "answer_key.csv")
+        s1_path = os.path.join(base_dir, "data", "samples", "01_B21DCCN001_Chuan.png")
+        img = cv2.imread(s1_path)
+        pipe = OMRPipeline(key_path)
+
+        # Standard anchored sheet -> no orientation warning
+        res_ok = pipe.process_sheet(img, "ANCHOR_OK", use_scratch_mode=True)
+        self.assertIsNone(res_ok.get("orientation_warning"))
+
+        # Portrait un-anchored legacy sheet -> soft orientation_warning present, warning still None
+        legacy = img.copy()
+        legacy[70:100, 726:756] = 0
+        res_leg = pipe.process_sheet(legacy, "LEGACY_PORTRAIT", use_scratch_mode=True)
+        self.assertIsNotNone(res_leg.get("orientation_warning"))
+        self.assertIsNone(res_leg.get("warning"))
+
+        # Landscape un-anchored sheet -> explicit orientation_warning AND warning populated
+        landscape_legacy = np.rot90(legacy, 3).copy()
+        res_land = pipe.process_sheet(landscape_legacy, "LEGACY_LANDSCAPE", use_scratch_mode=True)
+        self.assertIsNotNone(res_land.get("orientation_warning"))
+        self.assertIn("Cảnh báo định hướng NCC", res_land["orientation_warning"])
+        self.assertIn("Cảnh báo định hướng NCC", res_land.get("warning") or "")
+
+    def test_corner_error_vs_ground_truth_scenario_02(self):
+        """Verify corner localization Euclidean error vs saved ground truth is <= 3.0 px on DS-02."""
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        key_path = os.path.join(base_dir, "data", "answer_key.csv")
+        s2_path = os.path.join(base_dir, "data", "samples", "02_B21DCCN002_Nghieng_BanToi.png")
+        gt_c_path = os.path.join(base_dir, "data", "samples", "02_B21DCCN002_Nghieng_BanToi_corners_gt.csv")
+        df_c = pd.read_csv(gt_c_path)
+        gt_corners = df_c[["x", "y"]].values.astype(np.float32)
+
+        pipe = OMRPipeline(key_path)
+        img2 = cv2.imread(s2_path)
+        for use_sc in (True, False):
+            res = pipe.process_sheet(img2, "DS02_CORNER", use_scratch_mode=use_sc)
+            err = calculate_corner_error(res["corners"], gt_corners)
+            self.assertLessEqual(err, 3.0, f"E_corner={err} px exceeded 3.0 px (use_scratch={use_sc})")
+
+    def test_ablation_fp_fn_tradeoff_and_subpixel_parity(self):
+        """Verify ablation study reports FP/FN tradeoff on stress sheet and matches pipeline ratios sub-pixel."""
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        key_path = os.path.join(base_dir, "data", "answer_key.csv")
+        abl_img_path = os.path.join(base_dir, "data", "ablation", "ablation_faint_pencil_erasure.png")
+        abl_gt_path = os.path.join(base_dir, "data", "ablation", "ablation_faint_pencil_erasure_gt.csv")
+
+        df_gt = pd.read_csv(abl_gt_path)
+        gt_abl = dict(zip(df_gt.iloc[:, 0].astype(int), df_gt.iloc[:, 1].astype(str).str.strip()))
+        pipe = OMRPipeline(key_path)
+        out = pipe.process_sheet(cv2.imread(abl_img_path), "ABL_FP_FN", use_scratch_mode=True)
+        ab = run_ablation_study(
+            out["warped_gray"], gt_abl,
+            question_grid=out["question_grid"], bubble_radius=out["bubble_radius"]
+        )
+        survey_by_tau = {row["fill_threshold"]: row for row in ab["threshold_survey"]}
+        self.assertGreater(survey_by_tau[0.25]["fp_count"], 0)
+        self.assertEqual(survey_by_tau[0.38]["fp_count"], 0)
+        self.assertEqual(survey_by_tau[0.38]["fn_count"], 0)
+        self.assertEqual(survey_by_tau[0.38]["mark_accuracy_pct"], 100.0)
+        self.assertGreater(survey_by_tau[0.50]["fn_count"], 0)
+
+        # Sub-pixel fill ratio parity check vs DS-05 pipeline
+        from tv4_metrics import _compute_bubble_ratios_from_binary
+        from tv3_thresholding import adaptive_mean_threshold_scratch
+        from tv3_morphology_ccl import opening_binary_scratch
+        p4 = os.path.join(base_dir, "data", "samples", "04_B21DCCN004_ToSaiQuyChe_TayXoa.png")
+        out4 = pipe.process_sheet(cv2.imread(p4), "SUBPIX", use_scratch_mode=True)
+        bin4 = opening_binary_scratch(
+            adaptive_mean_threshold_scratch(out4["warped_gray"], block_size=51, C=42.0),
+            np.ones((3, 3), dtype=np.uint8),
+        )
+        _, ab_ratios = _compute_bubble_ratios_from_binary(
+            bin4, total_questions=20, question_grid=out4["question_grid"], bubble_radius=out4["bubble_radius"]
+        )
+        max_diff = max(
+            abs(out4["fill_ratios"][q][opt] - ab_ratios[q][opt])
+            for q in range(1, 21) for opt in ("A", "B", "C", "D")
+        )
+        self.assertLess(max_diff, 1e-6)
+
+    def test_non_one_based_question_ids_and_opencv_tv3_fallback_warning(self):
+        """Verify non-1-based question keys grade properly and OpenCV mode surfaces TV3 exception warning."""
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        s1_path = os.path.join(base_dir, "data", "samples", "01_B21DCCN001_Chuan.png")
+        img = cv2.imread(s1_path)
+
+        # Map Q1..Q20 answers to IDs 101..120
+        df_gt = pd.read_csv(os.path.join(base_dir, "data", "answer_key.csv"))
+        shifted_key = {100 + int(row.iloc[0]): str(row.iloc[1]).strip() for _, row in df_gt.iterrows()}
+        pipe = OMRPipeline()
+        pipe.grader.set_answer_key_dict(shifted_key)
+        res_shift = pipe.process_sheet(img, "SHIFT_101", use_scratch_mode=True)
+        self.assertEqual(res_shift["grading_result"]["score_10"], 8.5)
+        self.assertEqual(res_shift["grading_result"]["details"][0]["question"], 101)
+
+        # Simulate TV3 raising in OpenCV mode -> fallback_warning must still be populated
+        import pipeline_coordinator as pc
+        orig_cls = pc.TV3SegmentationPipeline
+
+        class _BrokenTV3:
+            def __init__(self, *args, **kwargs):
+                raise RuntimeError("Simulated TV3 OpenCV failure")
+
+        try:
+            pc.TV3SegmentationPipeline = _BrokenTV3
+            res_fb = pipe.process_sheet(img, "OPENCV_FB", use_scratch_mode=False)
+            self.assertIsNotNone(res_fb.get("fallback_warning"))
+            self.assertIn("Simulated TV3 OpenCV failure", res_fb["fallback_warning"])
+            self.assertEqual(res_fb["grading_result"]["score_10"], 8.5)
+        finally:
+            pc.TV3SegmentationPipeline = orig_cls
 
 
 if __name__ == "__main__":

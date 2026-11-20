@@ -19,6 +19,7 @@ try:
         _reflect_index,
         _pad_2d_scratch,
         median_filter_scratch,
+        create_anchor_marker_template,
         benchmark_hist_equalization,
         benchmark_median_filter,
     )
@@ -28,6 +29,7 @@ except ImportError:
         _reflect_index,
         _pad_2d_scratch,
         median_filter_scratch,
+        create_anchor_marker_template,
         benchmark_hist_equalization,
         benchmark_median_filter,
     )
@@ -39,6 +41,7 @@ try:
         calculate_psnr,
         calculate_difference_map,
         calculate_binary_iou_dice,
+        calculate_ccl_component_iou,
         calculate_otsu_delta_t,
         calculate_corner_error,
         VALID_OMR_OPTIONS,
@@ -55,6 +58,7 @@ except ImportError:
         calculate_psnr,
         calculate_difference_map,
         calculate_binary_iou_dice,
+        calculate_ccl_component_iou,
         calculate_otsu_delta_t,
         calculate_corner_error,
         VALID_OMR_OPTIONS,
@@ -86,6 +90,7 @@ __all__ = [
     "_reflect_index",
     "_pad_2d_scratch",
     "median_filter_scratch",
+    "create_anchor_marker_template",
     "benchmark_hist_equalization",
     "benchmark_median_filter",
     # Evaluation Metrics
@@ -93,6 +98,7 @@ __all__ = [
     "calculate_psnr",
     "calculate_difference_map",
     "calculate_binary_iou_dice",
+    "calculate_ccl_component_iou",
     "calculate_otsu_delta_t",
     "calculate_corner_error",
     "VALID_OMR_OPTIONS",

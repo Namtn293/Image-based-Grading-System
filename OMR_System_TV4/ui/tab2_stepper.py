@@ -85,6 +85,88 @@ def _to_gray_for_mode(img: np.ndarray, use_scratch: bool) -> np.ndarray:
     return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
 
+def _load_step_input(
+    step_key: str,
+    img_map: dict,
+    default_sheet_path: str,
+    default_csv_15_path: str,
+    default_csv_low_path: str,
+    default_csv_60_path: str,
+    as_gray: bool = False,
+    default_opt_label: str = "Chọn ảnh đầu vào:",
+):
+    """Unified Image or Grayscale CSV Matrix input selector for Steps 1, 2, 3."""
+    src_type = st.radio(
+        "Định dạng đầu vào:",
+        ["Ảnh chụp phiếu thi (.png / .jpg)", "Ma trận mức xám dạng File CSV"],
+        key=f"{step_key}_src_type",
+        horizontal=True,
+    )
+    if "File CSV" in src_type:
+        csv_mode = st.selectbox(
+            "Chọn ma trận CSV:",
+            [
+                "Mẫu 1: Ma trận 15x15 có nhiễu muối tiêu (sample_matrix_15x15.csv)",
+                "Mẫu 2: Ma trận 15x15 tương phản thấp (sample_matrix_low_contrast.csv)",
+                "Mẫu 3: Ma trận 60x60 có nhiễu (sample_matrix.csv)",
+                "Tải file CSV bất kỳ từ máy tính",
+            ],
+            key=f"{step_key}_csv_mode",
+        )
+        mat = None
+        src_name = "matrix.csv"
+        if "Mẫu 1" in csv_mode and os.path.exists(default_csv_15_path):
+            mat = load_matrix_from_csv(default_csv_15_path)
+            src_name = "sample_matrix_15x15.csv"
+        elif "Mẫu 2" in csv_mode and os.path.exists(default_csv_low_path):
+            mat = load_matrix_from_csv(default_csv_low_path)
+            src_name = "sample_matrix_low_contrast.csv"
+        elif "Mẫu 3" in csv_mode and os.path.exists(default_csv_60_path):
+            mat = load_matrix_from_csv(default_csv_60_path)
+            src_name = "sample_matrix.csv"
+        else:
+            up_csv = st.file_uploader("Nạp file ma trận CSV (.csv, .txt):", type=["csv", "txt"], key=f"{step_key}_up_csv")
+            if up_csv is not None:
+                try:
+                    mat = load_matrix_from_csv(io.StringIO(up_csv.getvalue().decode("utf-8-sig")))
+                    src_name = up_csv.name
+                except Exception as exc:
+                    st.error(f"Lỗi đọc file CSV: {exc}")
+        if mat is not None and not as_gray:
+            return mat.copy(), True, src_name
+        return mat, True, src_name
+
+    src_opt = st.selectbox(default_opt_label, list(img_map.keys()), key=f"{step_key}_src_opt")
+    if img_map[src_opt] is None:
+        up_img = st.file_uploader("Nạp ảnh (.png, .jpg):", type=["png", "jpg", "jpeg"], key=f"up_{step_key}")
+        if up_img is not None:
+            fb = np.asarray(bytearray(up_img.getvalue()), dtype=np.uint8)
+            flags = cv2.IMREAD_GRAYSCALE if as_gray else cv2.IMREAD_COLOR
+            return cv2.imdecode(fb, flags), False, up_img.name
+        return None, False, ""
+    p = img_map[src_opt]
+    chosen_p = p if os.path.exists(p) else default_sheet_path
+    flags = cv2.IMREAD_GRAYSCALE if as_gray else cv2.IMREAD_COLOR
+    return read_image_unicode(chosen_p, flags), False, os.path.basename(chosen_p)
+
+
+def _csv_download_button(matrix_2d: np.ndarray, filename: str, key: str, label: str = "Tải Ma Trận Kết Quả (.csv)"):
+    """Offer integer CSV download for any 2D grayscale or label matrix."""
+    if matrix_2d is None:
+        return
+    mat_export = matrix_2d if matrix_2d.ndim == 2 else cv2.cvtColor(matrix_2d, cv2.COLOR_BGR2GRAY)
+    csv_buf = io.StringIO()
+    np.savetxt(csv_buf, mat_export.astype(int), fmt="%d", delimiter=",")
+    st.download_button(
+        label=label,
+        data=csv_buf.getvalue(),
+        file_name=filename,
+        mime="text/csv",
+        use_container_width=True,
+        key=key,
+    )
+
+
 def render_tab2(
     use_scratch: bool,
     samples_dir: str,
@@ -150,17 +232,11 @@ def render_tab2(
                     "Bóng đổ chéo (05_B21DCCN005_BongDo_ChieuSangKhongDeu.png)": os.path.join(samples_dir, "05_B21DCCN005_BongDo_ChieuSangKhongDeu.png"),
                     "Tải ảnh từ máy tính": None,
                 }
-                m1_src_opt = st.selectbox("Chọn ảnh đầu vào:", list(m1_src_map.keys()), key="m1_src_opt")
-
-                m1_img_bgr = None
-                if m1_src_map[m1_src_opt] is None:
-                    up_m1 = st.file_uploader("Nạp ảnh (.png, .jpg):", type=["png", "jpg", "jpeg"], key="up_m1")
-                    if up_m1 is not None:
-                        fb = np.asarray(bytearray(up_m1.getvalue()), dtype=np.uint8)
-                        m1_img_bgr = cv2.imdecode(fb, cv2.IMREAD_COLOR)
-                else:
-                    p = m1_src_map[m1_src_opt]
-                    m1_img_bgr = read_image_unicode(p if os.path.exists(p) else default_sheet_path)
+                m1_img_bgr, m1_is_csv, m1_src_name = _load_step_input(
+                    "m1", m1_src_map, default_sheet_path,
+                    default_csv_15_path, default_csv_low_path, default_csv_60_path,
+                    as_gray=False, default_opt_label="Chọn ảnh đầu vào:"
+                )
 
                 m1_algo = st.selectbox(
                     "Chọn thuật toán:",
@@ -241,13 +317,20 @@ def render_tab2(
                         "algo": m1_algo,
                         "mode": used_core,
                         "elapsed_ms": elapsed_ms,
-                        "extra": extra_info
+                        "extra": extra_info,
+                        "is_csv": m1_is_csv,
+                        "source_name": m1_src_name,
                     }
 
                 if st.session_state.tab2_m1_result is not None:
                     r1 = st.session_state.tab2_m1_result
                     st.divider()
                     st.metric("Thời gian thực thi", f"{r1['elapsed_ms']:.2f} ms", delta=r1.get("mode", ""))
+                    _csv_download_button(
+                        r1["out_vis"],
+                        filename=f"ket_qua_b1_{os.path.splitext(r1.get('source_name', 'tien_xu_ly'))[0]}.csv",
+                        key="dl_csv_tv1",
+                    )
                     ok_png, png_buf = cv2.imencode(".png", r1["out_vis"])
                     if ok_png:
                         st.download_button(
@@ -267,14 +350,19 @@ def render_tab2(
                     st.success(f"Đã thực thi {r1['algo']} ({r1.get('mode', '')}) trong {r1['elapsed_ms']:.2f} ms.")
                     c1, c2 = st.columns(2)
                     with c1:
-                        st.markdown("###### Ảnh Đầu Vào")
-                        st.image(cv2.cvtColor(r1["in_bgr"], cv2.COLOR_BGR2RGB) if r1["in_bgr"].ndim == 3 else r1["in_bgr"], use_container_width=True)
+                        st.markdown("###### Ảnh / Ma Trận Đầu Vào")
+                        st.image(cv2.cvtColor(r1["in_bgr"], cv2.COLOR_BGR2RGB) if r1["in_bgr"].ndim == 3 else r1["in_bgr"], use_container_width=True, channels="RGB" if r1["in_bgr"].ndim == 3 else "GRAY")
                     with c2:
                         st.markdown("###### Kết Quả Xử Lý")
                         if r1["out_vis"].ndim == 2:
                             st.image(r1["out_vis"], use_container_width=True, channels="GRAY")
                         else:
                             st.image(cv2.cvtColor(r1["out_vis"], cv2.COLOR_BGR2RGB), use_container_width=True)
+
+                    if r1.get("is_csv") and r1["out_vis"].ndim == 2:
+                        out_m = r1["out_vis"]
+                        st.markdown("###### Lát Cắt Ma Trận Kết Quả (Giá trị số học):")
+                        st.dataframe(pd.DataFrame(out_m[:30, :30] if max(out_m.shape) > 100 else out_m), use_container_width=True, height=200)
 
                     if r1["extra"] and "corners" in r1["extra"]:
                         st.markdown("###### Tọa Độ 4 Đỉnh Góc Khung Phiếu Phát Hiện Được:")
@@ -288,7 +376,12 @@ def render_tab2(
                         st.table(pd.DataFrame(c_rows))
                 else:
                     if m1_img_bgr is not None:
-                        st.image(cv2.cvtColor(m1_img_bgr, cv2.COLOR_BGR2RGB), caption=f"Ảnh đầu vào hiện tại ({m1_img_bgr.shape[1]}x{m1_img_bgr.shape[0]})", use_container_width=True)
+                        if m1_img_bgr.ndim == 2:
+                            st.image(m1_img_bgr, caption=f"Ma trận đầu vào hiện tại ({m1_img_bgr.shape[1]}x{m1_img_bgr.shape[0]})", use_container_width=True, channels="GRAY")
+                            if m1_is_csv:
+                                st.dataframe(pd.DataFrame(m1_img_bgr[:30, :30] if max(m1_img_bgr.shape) > 100 else m1_img_bgr), use_container_width=True, height=200)
+                        else:
+                            st.image(cv2.cvtColor(m1_img_bgr, cv2.COLOR_BGR2RGB), caption=f"Ảnh đầu vào hiện tại ({m1_img_bgr.shape[1]}x{m1_img_bgr.shape[0]})", use_container_width=True)
                         st.info("Bấm nút 'Thực Thi Tiền Xử Lý' ở cột điều khiển bên trái để bắt đầu chạy.")
 
     # -----------------------------------------------------
@@ -307,17 +400,11 @@ def render_tab2(
                     "Ảnh bóng đổ chéo (05_B21DCCN005_BongDo_ChieuSangKhongDeu.png)": os.path.join(samples_dir, "05_B21DCCN005_BongDo_ChieuSangKhongDeu.png"),
                     "Tải ảnh tùy chọn từ máy tính": None,
                 }
-                m2_src_opt = st.selectbox("Chọn ảnh kiểm thử nắn phẳng:", list(m2_src_map.keys()), key="m2_src_opt")
-
-                m2_img_bgr = None
-                if m2_src_map[m2_src_opt] is None:
-                    up_m2 = st.file_uploader("Nạp ảnh nghiêng (.png, .jpg):", type=["png", "jpg", "jpeg"], key="up_m2")
-                    if up_m2 is not None:
-                        fb = np.asarray(bytearray(up_m2.getvalue()), dtype=np.uint8)
-                        m2_img_bgr = cv2.imdecode(fb, cv2.IMREAD_COLOR)
-                else:
-                    p = m2_src_map[m2_src_opt]
-                    m2_img_bgr = read_image_unicode(p if os.path.exists(p) else default_sheet_path)
+                m2_img_bgr, m2_is_csv, m2_src_name = _load_step_input(
+                    "m2", m2_src_map, default_sheet_path,
+                    default_csv_15_path, default_csv_low_path, default_csv_60_path,
+                    as_gray=False, default_opt_label="Chọn ảnh kiểm thử nắn phẳng:"
+                )
 
                 rot_opt = st.selectbox(
                     "Mô phỏng góc xoay đầu vào (Kiểm thử NCC):",
@@ -359,6 +446,7 @@ def render_tab2(
                     final_src = None
                     detected_angle = 0
                     marker_scores = []
+                    ncc_warning = None
                     used_core = "Scratch (NumPy)" if use_scratch else "OpenCV Baseline"
 
                     try:
@@ -372,7 +460,7 @@ def render_tab2(
                             auto_size = (w_est, h_est)
 
                         final_src = ordered_src
-                        if enable_ncc:
+                        if enable_ncc and min(gray.shape[:2]) >= 30:
                             same_orient = (auto_size[0] > auto_size[1]) == (800 > 1000)
                             preview_size = (800, 1000) if same_orient else (1000, 800)
                             if use_scratch and solve_homography_svd is not None and warp_perspective_bilinear is not None and destination_corners is not None:
@@ -393,14 +481,21 @@ def render_tab2(
                             sorted_sc = sorted((s for _, s in marker_scores), reverse=True)
                             top1 = sorted_sc[0] if len(sorted_sc) >= 1 else -1.0
                             top2 = sorted_sc[1] if len(sorted_sc) >= 2 else -1.0
-                            if top1 < 0.72 or (top1 - top2) < 0.15:
+                            margin = top1 - top2
+                            if top1 < 0.72 or margin < 0.15:
                                 detected_angle = 0
+                                ncc_warning = (
+                                    f"Cảnh báo định hướng NCC: Không phát hiện chắc chắn Anchor Marker "
+                                    f"(top1={top1:.2f}, margin={margin:.2f}). Hệ thống giữ nguyên góc 0° mặc định."
+                                )
 
                             if detected_angle != 0:
                                 if corners_for_angle is not None:
                                     final_src = corners_for_angle(ordered_src, detected_angle)
                                 else:
                                     final_src = np.roll(ordered_src, -(detected_angle // 90), axis=0)
+                        elif enable_ncc and min(gray.shape[:2]) < 30:
+                            ncc_warning = "Ma trận đầu vào nhỏ hơn 30x30 nên bỏ qua bước so khớp Anchor NCC."
 
                         dst_corners = np.array([
                             [0, 0],
@@ -438,9 +533,12 @@ def render_tab2(
                             "src_corners": final_src,
                             "detected_angle": detected_angle,
                             "marker_scores": marker_scores,
+                            "ncc_warning": ncc_warning,
                             "mode": used_core,
                             "elapsed_ms": elapsed_ms,
-                            "out_size": (w_tgt, h_tgt)
+                            "out_size": (w_tgt, h_tgt),
+                            "is_csv": m2_is_csv,
+                            "source_name": m2_src_name,
                         }
 
                 if st.session_state.tab2_m2_result is not None:
@@ -452,6 +550,11 @@ def render_tab2(
                     st.markdown("###### Ma Trận Homography $\\mathbf{H}_{3 \\times 3}$:")
                     h_df = pd.DataFrame(r2["H_mat"], columns=["h_x", "h_y", "h_w"], index=["row 1", "row 2", "row 3"])
                     st.dataframe(h_df.style.format("{:.5f}"), use_container_width=True)
+                    _csv_download_button(
+                        r2["warped"],
+                        filename=f"ket_qua_b2_{os.path.splitext(r2.get('source_name', 'nan_phang'))[0]}.csv",
+                        key="dl_csv_tv2",
+                    )
                     ok_png, png_buf = cv2.imencode(".png", r2["warped"])
                     if ok_png:
                         st.download_button(
@@ -472,13 +575,15 @@ def render_tab2(
                         f"Đã giải hệ Homography ({r2.get('mode', '')}) & nắn thẳng bài thi trong {r2['elapsed_ms']:.2f} ms "
                         f"(Góc NCC phát hiện: {r2.get('detected_angle', 0)}°)."
                     )
+                    if r2.get("ncc_warning"):
+                        st.warning(r2["ncc_warning"])
                     c1, c2 = st.columns(2)
                     with c1:
                         st.markdown("###### Ảnh Đầu Vào (4 Đỉnh Chuẩn Hóa)")
                         st.image(cv2.cvtColor(r2["vis_src"], cv2.COLOR_BGR2RGB) if r2["vis_src"].ndim == 3 else r2["vis_src"], use_container_width=True)
                     with c2:
                         st.markdown(f"###### Ảnh Sau Nắn Phẳng ({r2['out_size'][0]}x{r2['out_size'][1]})")
-                        st.image(cv2.cvtColor(r2["warped"], cv2.COLOR_BGR2RGB) if r2["warped"].ndim == 3 else r2["warped"], use_container_width=True)
+                        st.image(cv2.cvtColor(r2["warped"], cv2.COLOR_BGR2RGB) if r2["warped"].ndim == 3 else r2["warped"], use_container_width=True, channels="RGB" if r2["warped"].ndim == 3 else "GRAY")
 
                     if r2.get("marker_scores"):
                         st.markdown("###### Điểm Tương Quan NCC Anchor Marker Tại 4 Góc:")
@@ -487,11 +592,14 @@ def render_tab2(
                 else:
                     if m2_img_bgr is not None:
                         preview_in = np.rot90(m2_img_bgr, rot_k).copy() if rot_k else m2_img_bgr
-                        st.image(
-                            cv2.cvtColor(preview_in, cv2.COLOR_BGR2RGB),
-                            caption=f"Ảnh đầu vào hiện tại ({preview_in.shape[1]}x{preview_in.shape[0]}, xoay mô phỏng {rot_opt})",
-                            use_container_width=True
-                        )
+                        if preview_in.ndim == 2:
+                            st.image(preview_in, caption=f"Ma trận đầu vào hiện tại ({preview_in.shape[1]}x{preview_in.shape[0]}, xoay mô phỏng {rot_opt})", use_container_width=True, channels="GRAY")
+                        else:
+                            st.image(
+                                cv2.cvtColor(preview_in, cv2.COLOR_BGR2RGB),
+                                caption=f"Ảnh đầu vào hiện tại ({preview_in.shape[1]}x{preview_in.shape[0]}, xoay mô phỏng {rot_opt})",
+                                use_container_width=True
+                            )
                         st.info("Bấm nút 'Thực Thi Nắn Phẳng Phối Cảnh SVD' ở cột bên trái để nắn thẳng tờ phiếu.")
 
     # -----------------------------------------------------
@@ -511,17 +619,11 @@ def render_tab2(
                     "Ảnh tô sai quy chế & tẩy xóa (04_B21DCCN004_ToSaiQuyChe_TayXoa.png)": os.path.join(samples_dir, "04_B21DCCN004_ToSaiQuyChe_TayXoa.png"),
                     "Tải ảnh tùy chọn từ máy tính": None,
                 }
-                m3_src_opt = st.selectbox("Chọn ảnh đầu vào:", list(m3_src_map.keys()), key="m3_src_opt")
-
-                m3_img = None
-                if m3_src_map[m3_src_opt] is None:
-                    up_m3 = st.file_uploader("Nạp ảnh (.png, .jpg):", type=["png", "jpg", "jpeg"], key="up_m3")
-                    if up_m3 is not None:
-                        fb = np.asarray(bytearray(up_m3.getvalue()), dtype=np.uint8)
-                        m3_img = cv2.imdecode(fb, cv2.IMREAD_GRAYSCALE)
-                else:
-                    p = m3_src_map[m3_src_opt]
-                    m3_img = read_image_unicode(p if os.path.exists(p) else default_sheet_path, cv2.IMREAD_GRAYSCALE)
+                m3_img, m3_is_csv, m3_src_name = _load_step_input(
+                    "m3", m3_src_map, default_sheet_path,
+                    default_csv_15_path, default_csv_low_path, default_csv_60_path,
+                    as_gray=True, default_opt_label="Chọn ảnh đầu vào:"
+                )
 
                 m3_algo = st.selectbox(
                     "Chọn thuật toán phân đoạn:",
@@ -537,9 +639,9 @@ def render_tab2(
                 if "Adaptive" in m3_algo:
                     bs_col, c_col = st.columns(2)
                     with bs_col:
-                        m3_params["block_size"] = st.selectbox("Block Size:", [31, 51, 71], index=1, key="m3_bs")
+                        m3_params["block_size"] = st.selectbox("Block Size:", [5, 11, 31, 51, 71], index=3, key="m3_bs")
                     with c_col:
-                        m3_params["C"] = st.slider("Hằng số C:", 10.0, 60.0, 42.0, 2.0, key="m3_c")
+                        m3_params["C"] = st.slider("Hằng số C:", 5.0, 60.0, 42.0, 2.0, key="m3_c")
                 elif "hình thái" in m3_algo:
                     m3_params["base"] = st.selectbox("Mặt nạ nhị phân nền:", ["Adaptive Mean (51, 42)", "Otsu toàn cục"], key="m3_morph_base")
                     m3_params["op"] = st.selectbox(
@@ -553,11 +655,21 @@ def render_tab2(
 
                 btn_run_m3 = st.button("Thực Thi Phân Đoạn & CCL", type="primary", use_container_width=True, key="btn_run_m3")
 
+                def _clamp_block_size(img_g: np.ndarray, requested_bs: int) -> int:
+                    min_dim = min(img_g.shape[:2])
+                    bs_safe = min(int(requested_bs), max(3, min_dim if min_dim % 2 == 1 else min_dim - 1))
+                    if bs_safe < 3:
+                        bs_safe = 3
+                    if bs_safe % 2 == 0:
+                        bs_safe -= 1
+                    return bs_safe
+
                 def _get_base_binary(img_g: np.ndarray, base_label: str) -> np.ndarray:
                     if "Adaptive" in base_label:
+                        bs_safe = _clamp_block_size(img_g, 51)
                         if use_scratch and adaptive_mean_threshold_scratch is not None:
-                            return adaptive_mean_threshold_scratch(img_g, block_size=51, C=42.0)
-                        return cv2.adaptiveThreshold(img_g, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 51, 42)
+                            return adaptive_mean_threshold_scratch(img_g, block_size=bs_safe, C=42.0)
+                        return cv2.adaptiveThreshold(img_g, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, bs_safe, 42)
                     if use_scratch and otsu_threshold_scratch is not None:
                         _, b_out = otsu_threshold_scratch(img_g, method="BINARY_INV")
                         return b_out
@@ -577,7 +689,7 @@ def render_tab2(
                             t_val, out_bin = cv2.threshold(m3_img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
                         extra_data = {"otsu_t": t_val}
                     elif "Adaptive" in m3_algo:
-                        bs_val = int(m3_params.get("block_size", 51))
+                        bs_val = _clamp_block_size(m3_img, int(m3_params.get("block_size", 51)))
                         c_val = float(m3_params.get("C", 42.0))
                         if use_scratch and adaptive_mean_threshold_scratch is not None:
                             out_bin = adaptive_mean_threshold_scratch(m3_img, block_size=bs_val, C=c_val)
@@ -615,7 +727,7 @@ def render_tab2(
                         colors = rng.integers(50, 255, size=(num_comp + 1, 3), dtype=np.uint8)
                         colors[0] = [0, 0, 0]
                         out_bin = colors[labels]
-                        extra_data = {"num_comp": num_comp, "stats": stats}
+                        extra_data = {"num_comp": num_comp, "stats": stats, "labels": labels}
 
                     elapsed_ms = (time.perf_counter() - t0) * 1000.0
                     st.session_state.tab2_m3_result = {
@@ -624,13 +736,21 @@ def render_tab2(
                         "algo": m3_algo,
                         "mode": used_core,
                         "elapsed_ms": elapsed_ms,
-                        "extra": extra_data
+                        "extra": extra_data,
+                        "is_csv": m3_is_csv,
+                        "source_name": m3_src_name,
                     }
 
                 if st.session_state.tab2_m3_result is not None:
                     r3 = st.session_state.tab2_m3_result
                     st.divider()
                     st.metric("Thời gian thực thi", f"{r3['elapsed_ms']:.2f} ms", delta=r3.get("mode", ""))
+                    csv_target = r3["extra"]["labels"] if (r3.get("extra") and "labels" in r3["extra"]) else r3["out_bin"]
+                    _csv_download_button(
+                        csv_target,
+                        filename=f"ket_qua_b3_{os.path.splitext(r3.get('source_name', 'phan_doan'))[0]}.csv",
+                        key="dl_csv_tv3",
+                    )
                     png_input = r3["out_bin"] if r3["out_bin"].ndim == 2 else cv2.cvtColor(r3["out_bin"], cv2.COLOR_RGB2BGR)
                     ok_png, png_buf = cv2.imencode(".png", png_input)
                     if ok_png:
@@ -651,11 +771,17 @@ def render_tab2(
                     st.success(f"Đã thực thi thành công {r3['algo']} ({r3.get('mode', '')}) trong {r3['elapsed_ms']:.2f} ms.")
                     c1, c2 = st.columns(2)
                     with c1:
-                        st.markdown("###### Ảnh Xám Đầu Vào")
+                        st.markdown("###### Ảnh / Ma Trận Đầu Vào")
                         st.image(r3["in_gray"], use_container_width=True, channels="GRAY")
                     with c2:
                         st.markdown("###### Mặt Nạ Nhị Phân / Nhãn CCL")
                         st.image(r3["out_bin"], use_container_width=True, channels="RGB" if r3["out_bin"].ndim == 3 else "GRAY")
+
+                    if r3.get("is_csv"):
+                        csv_view = r3["extra"]["labels"] if (r3.get("extra") and "labels" in r3["extra"]) else r3["out_bin"]
+                        if csv_view.ndim == 2:
+                            st.markdown("###### Ma Trận Số Học Sau Phân Đoạn / CCL:")
+                            st.dataframe(pd.DataFrame(csv_view[:30, :30] if max(csv_view.shape) > 100 else csv_view), use_container_width=True, height=200)
 
                     if r3["extra"] and "otsu_t" in r3["extra"]:
                         st.info(f"Ngưỡng tối ưu toàn cục tính được bởi Otsu: T* = {r3['extra']['otsu_t']}")
@@ -665,7 +791,9 @@ def render_tab2(
                         st.dataframe(df_ccl.head(15), use_container_width=True, height=220)
                 else:
                     if m3_img is not None:
-                        st.image(m3_img, caption="Ảnh xám đầu vào hiện tại", use_container_width=True, channels="GRAY")
+                        st.image(m3_img, caption="Ảnh xám / Ma trận đầu vào hiện tại", use_container_width=True, channels="GRAY")
+                        if m3_is_csv:
+                            st.dataframe(pd.DataFrame(m3_img[:30, :30] if max(m3_img.shape) > 100 else m3_img), use_container_width=True, height=200)
                         st.info("Bấm nút 'Thực Thi Phân Đoạn & CCL' ở cột bên trái để chạy.")
 
     # -----------------------------------------------------
