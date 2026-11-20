@@ -295,7 +295,8 @@ class TV3SegmentationPipeline:
         warped_gray: np.ndarray,
         question_grid: Optional[Dict[int, Dict[str, Tuple[float, float]]]] = None,
         run_opencv_benchmark: bool = True,
-        execution_mode: Optional[str] = None
+        execution_mode: Optional[str] = None,
+        run_ccl: Optional[bool] = None,
     ) -> TV3PipelineResult:
         """
         Thực thi pipeline trên ảnh xám phiếu thi đã được nắn thẳng phối cảnh.
@@ -307,6 +308,9 @@ class TV3SegmentationPipeline:
             run_opencv_benchmark (bool): Nếu True, chạy thêm pipeline đối chứng OpenCV để đo đạc.
             execution_mode (Optional[str]): 'scratch' hoặc 'opencv'. Nếu None lấy từ config.execution_mode.
                                             Cả hai chế độ dùng chung 100% bộ tham số trong self.config.
+            run_ccl (Optional[bool]): Điều khiển chạy bước Two-Pass CCL. Nếu None (mặc định), tự động
+                                      bỏ qua CCL khi đã truyền sẵn `question_grid` và `run_opencv_benchmark=False`
+                                      để tránh chạy CCL dư thừa khi tích hợp.
 
         Trả về:
             TV3PipelineResult: Đối tượng chứa toàn bộ kết quả phân đoạn, nhận diện và đối chứng.
@@ -317,6 +321,8 @@ class TV3SegmentationPipeline:
         mode = (execution_mode or self.config.execution_mode or "scratch").strip().lower()
         if mode not in ("scratch", "opencv"):
             raise ValueError(f"execution_mode phải là 'scratch' hoặc 'opencv', nhận được: {mode}")
+
+        should_run_ccl = bool(run_ccl) if run_ccl is not None else (question_grid is None or bool(run_opencv_benchmark))
 
         img_gray = np.clip(warped_gray, 0, 255).astype(np.uint8)
         H, W = img_gray.shape
@@ -361,23 +367,30 @@ class TV3SegmentationPipeline:
             # ------------------------------------------------------------------
             # BƯỚC 3: GÁN NHÃN THÀNH PHẦN LIÊN THÔNG (TWO-PASS CCL SCRATCH)
             # ------------------------------------------------------------------
-            t0 = time.perf_counter()
-            num_components, labels, raw_stats = two_pass_ccl_scratch(
-                bin_morph,
-                connectivity=self.config.connectivity
-            )
-
-            filtered_stats = raw_stats
-            if self.config.filter_bubbles and num_components > 0:
-                _, filtered_stats = filter_bubble_components(
-                    labels,
-                    raw_stats,
-                    min_area=self.config.min_area,
-                    max_area=self.config.max_area,
-                    aspect_ratio_range=self.config.aspect_ratio_range,
-                    min_extent=self.config.min_extent
+            if should_run_ccl:
+                t0 = time.perf_counter()
+                num_components, labels, raw_stats = two_pass_ccl_scratch(
+                    bin_morph,
+                    connectivity=self.config.connectivity
                 )
-            latencies["ccl_ms"] = (time.perf_counter() - t0) * 1000.0
+
+                filtered_stats = raw_stats
+                if self.config.filter_bubbles and num_components > 0:
+                    _, filtered_stats = filter_bubble_components(
+                        labels,
+                        raw_stats,
+                        min_area=self.config.min_area,
+                        max_area=self.config.max_area,
+                        aspect_ratio_range=self.config.aspect_ratio_range,
+                        min_extent=self.config.min_extent
+                    )
+                latencies["ccl_ms"] = (time.perf_counter() - t0) * 1000.0
+            else:
+                num_components = 0
+                labels = np.zeros_like(bin_morph, dtype=np.int32)
+                raw_stats = []
+                filtered_stats = []
+                latencies["ccl_ms"] = 0.0
         else:
             # ------------------------------------------------------------------
             # CHẾ ĐỘ OPENCV DÙNG CHUNG BỘ THAM SỐ CONFIG VỚI SCRATCH
@@ -417,36 +430,43 @@ class TV3SegmentationPipeline:
                 bin_morph = cv2.morphologyEx(bin_morph, cv2.MORPH_CLOSE, kernel_cv)
             latencies["morphology_ms"] = (time.perf_counter() - t0) * 1000.0
 
-            t0 = time.perf_counter()
-            num_labels_cv, labels_cv, stats_cv, cents_cv = cv2.connectedComponentsWithStats(
-                bin_morph,
-                connectivity=self.config.connectivity
-            )
-            num_components = max(0, int(num_labels_cv) - 1)
-            labels = labels_cv.astype(np.int32)
-            raw_stats = []
-            for k in range(1, num_labels_cv):
-                bx, by, bw, bh, area_k = [int(v) for v in stats_cv[k, :5]]
-                raw_stats.append({
-                    "label": k,
-                    "area": area_k,
-                    "bbox": (bx, by, bw, bh),
-                    "centroid": (float(cents_cv[k, 0]), float(cents_cv[k, 1])),
-                    "aspect_ratio": float(bw / max(1, bh)),
-                    "extent": float(area_k / max(1, bw * bh)),
-                })
-
-            filtered_stats = raw_stats
-            if self.config.filter_bubbles and num_components > 0:
-                _, filtered_stats = filter_bubble_components(
-                    labels,
-                    raw_stats,
-                    min_area=self.config.min_area,
-                    max_area=self.config.max_area,
-                    aspect_ratio_range=self.config.aspect_ratio_range,
-                    min_extent=self.config.min_extent
+            if should_run_ccl:
+                t0 = time.perf_counter()
+                num_labels_cv, labels_cv, stats_cv, cents_cv = cv2.connectedComponentsWithStats(
+                    bin_morph,
+                    connectivity=self.config.connectivity
                 )
-            latencies["ccl_ms"] = (time.perf_counter() - t0) * 1000.0
+                num_components = max(0, int(num_labels_cv) - 1)
+                labels = labels_cv.astype(np.int32)
+                raw_stats = []
+                for k in range(1, num_labels_cv):
+                    bx, by, bw, bh, area_k = [int(v) for v in stats_cv[k, :5]]
+                    raw_stats.append({
+                        "label": k,
+                        "area": area_k,
+                        "bbox": (bx, by, bw, bh),
+                        "centroid": (float(cents_cv[k, 0]), float(cents_cv[k, 1])),
+                        "aspect_ratio": float(bw / max(1, bh)),
+                        "extent": float(area_k / max(1, bw * bh)),
+                    })
+
+                filtered_stats = raw_stats
+                if self.config.filter_bubbles and num_components > 0:
+                    _, filtered_stats = filter_bubble_components(
+                        labels,
+                        raw_stats,
+                        min_area=self.config.min_area,
+                        max_area=self.config.max_area,
+                        aspect_ratio_range=self.config.aspect_ratio_range,
+                        min_extent=self.config.min_extent
+                    )
+                latencies["ccl_ms"] = (time.perf_counter() - t0) * 1000.0
+            else:
+                num_components = 0
+                labels = np.zeros_like(bin_morph, dtype=np.int32)
+                raw_stats = []
+                filtered_stats = []
+                latencies["ccl_ms"] = 0.0
 
         # ----------------------------------------------------------------------
         # BƯỚC 4: THIẾT LẬP LƯỚI TỌA ĐỘ ROI CÁC Ô TRÒN
@@ -501,7 +521,8 @@ class TV3SegmentationPipeline:
                 bin_thresh_scratch=bin_thresh,
                 bin_morph_scratch=bin_morph,
                 thresh_val_scratch=thresh_val,
-                ccl_count_scratch=num_components
+                ccl_count_scratch=num_components,
+                run_ccl=should_run_ccl,
             )
 
         return TV3PipelineResult(
@@ -526,7 +547,8 @@ class TV3SegmentationPipeline:
         bin_thresh_scratch: np.ndarray,
         bin_morph_scratch: np.ndarray,
         thresh_val_scratch: Optional[float],
-        ccl_count_scratch: int
+        ccl_count_scratch: int,
+        run_ccl: bool = True,
     ) -> Dict[str, Any]:
         """Thực thi pipeline OpenCV đối chứng để so sánh độ chính xác và tốc độ."""
         import cv2
@@ -569,13 +591,17 @@ class TV3SegmentationPipeline:
         cv_t_morph = (time.perf_counter() - t0) * 1000.0
 
         # 3. CCL OpenCV
-        t0 = time.perf_counter()
-        num_labels_cv, _, _, _ = cv2.connectedComponentsWithStats(
-            bin_cv_morph,
-            connectivity=self.config.connectivity
-        )
-        ccl_cv_count = num_labels_cv - 1
-        cv_t_ccl = (time.perf_counter() - t0) * 1000.0
+        if run_ccl:
+            t0 = time.perf_counter()
+            num_labels_cv, _, _, _ = cv2.connectedComponentsWithStats(
+                bin_cv_morph,
+                connectivity=self.config.connectivity
+            )
+            ccl_cv_count = num_labels_cv - 1
+            cv_t_ccl = (time.perf_counter() - t0) * 1000.0
+        else:
+            ccl_cv_count = 0
+            cv_t_ccl = 0.0
         cv_t_total = (time.perf_counter() - t_cv_start) * 1000.0
 
         # Đo độ khớp định lượng
@@ -623,7 +649,8 @@ def run_tv3_pipeline(
     delta_tau_min: float = DEFAULT_DELTA_TAU_MIN,
     num_questions: int = 20,
     question_grid: Optional[Dict[int, Dict[str, Tuple[float, float]]]] = None,
-    run_opencv_benchmark: bool = True
+    run_opencv_benchmark: bool = True,
+    run_ccl: Optional[bool] = None,
 ) -> TV3PipelineResult:
     """
     Hàm top-level thực thi trọn gói pipeline của Thành viên 3 một cách tiện lợi.
@@ -639,6 +666,7 @@ def run_tv3_pipeline(
         num_questions: Số lượng câu hỏi (mặc định 20).
         question_grid: Lưới tọa độ tâm các ô (hoặc None để tự động tạo).
         run_opencv_benchmark: Có đo đối chứng với OpenCV không.
+        run_ccl: Điều khiển chạy bước Two-Pass CCL (None = tự bỏ qua nếu đã có question_grid và không chạy benchmark).
 
     Trả về:
         TV3PipelineResult: Kết quả phân đoạn và nhận diện.
@@ -656,7 +684,8 @@ def run_tv3_pipeline(
     return pipeline.run(
         warped_gray=warped_gray,
         question_grid=question_grid,
-        run_opencv_benchmark=run_opencv_benchmark
+        run_opencv_benchmark=run_opencv_benchmark,
+        run_ccl=run_ccl,
     )
 
 

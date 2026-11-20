@@ -188,9 +188,9 @@ c:\Users\Admin\Desktop\xla\
 │   └── tv3_segmentation.py        # TV3SegmentationPipeline tích hợp đầu-cuối & Standalone CLI
 ├── tests\
 │   ├── test_tv3_thresholding.py   # 37 Unit tests cho ngưỡng Otsu và Adaptive
-│   ├── test_tv3_morphology_ccl.py # 18 Unit tests cho Morphology và Two-Pass CCL
+│   ├── test_tv3_morphology_ccl.py # 19 Unit tests cho Morphology và Two-Pass CCL
 │   ├── test_tv3_roi_classifier.py # 10 Unit tests cho Fill Ratio, auto-grid và phân loại đáp án
-│   └── test_tv3_benchmark.py      # 12 Integration tests nghiệm thu & xử lý các mục Code Review
+│   └── test_tv3_benchmark.py      # 19 Integration tests nghiệm thu & xử lý các mục Code Review
 ├── outputs\tv3\                   # Toàn bộ sản phẩm ảnh và số liệu xuất tự động
 │   ├── 1_input_warped.png         # Ảnh xám phiếu thi đầu vào
 │   ├── 2_thresholded.png          # Ảnh sau phân ngưỡng nhị phân
@@ -229,6 +229,8 @@ Thực nghiệm được tiến hành trên phiếu thi OMR chuẩn kích thư�
    - Rút gọn bước đánh lại nhãn Two-Pass CCL từ $O(K \cdot L)$ xuống $O(K + L)$ và lọc LUT trong `filter_bubble_components`, loại bỏ nút cổ chai trên ảnh nhiều nhiễu.
    - Tính ngưỡng nhị phân một lần trong `recognize_all_questions` thay vì gọi `np.max(binary_image)` lặp lại cho từng ô.
    - Chuyển toàn bộ `import cv2` vào trong các hàm benchmark/trực quan hóa để module lõi chạy độc lập 100% chỉ cần `NumPy`.
+   - **Tối ưu Mục 2.2 (Code Review lần 3):** Trong `TV3SegmentationPipeline.run(..., run_ccl=None)`, tự động bỏ qua bước Two-Pass CCL khi đã truyền sẵn `question_grid` và `run_opencv_benchmark=False` (hoặc khi truyền tường minh `run_ccl=False`), loại bỏ 1 lượt chạy CCL dư thừa khi tích hợp với TV4 (`pipeline_coordinator.py`) và `extract_bubble_answers`.
+   - **Ghi chú Mục 3.3 (Hai bản Otsu):** Cài đặt `otsu_threshold_scratch` tại `src/tv3_thresholding.py` (TV3) tồn tại song song với bản Otsu trong `OMR_System_TV1/src/tv1_hough.py` một cách có chủ đích để mỗi phân hệ giữ tính độc lập hoàn toàn (Loose Coupling), không tạo phụ thuộc chéo giữa mã nguồn của các thành viên.
 
 ---
 
@@ -312,7 +314,7 @@ tv3_result.save_json("outputs/tv3/recognition_results.json")
 
 * **Khối lượng công việc:** Thành viên 3 đã hoàn thành $100\%$ khối lượng công việc được giao theo đúng kế hoạch đề tài, bao gồm:
   - 04 file mã nguồn kỹ thuật tại `src/` (đóng gói thành package `tv3` qua `pyproject.toml`, không chèn `sys.path` gây xung đột).
-  - 04 file kiểm thử tại `tests/` với **77/77 test cases vượt qua (100% Pass)**.
+  - 04 file kiểm thử tại `tests/` với **85/85 test cases vượt qua (100% Pass)**.
   - Bộ sinh dữ liệu mô phỏng OMR và bộ trực quan hóa Triplet View đạt chuẩn báo cáo khoa học.
 * **Xác nhận chỉ tiêu nghiệm thu:**
   - $\Delta T_{\text{Otsu}} \le 1.0$ mức xám: **ĐẠT** ($\Delta T = 0.0$).

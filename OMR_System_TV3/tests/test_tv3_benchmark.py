@@ -533,3 +533,64 @@ def test_non_square_kernel_pipeline_and_extract_parity(synthetic_ds01_clean, ksi
         for opt in ("A", "B", "C", "D"):
             assert ratios_sc[q_id][opt] == pytest.approx(ratios_cv[q_id][opt], abs=1e-6)
 
+
+def test_pipeline_skips_redundant_ccl_when_question_grid_provided(monkeypatch, synthetic_ds01_clean):
+    """
+    Xác thực Mục 2.2 (Code Review lần 3):
+    - Khi truyền sẵn `question_grid` và `run_opencv_benchmark=False`, `TV3SegmentationPipeline.run`
+      tự động bỏ qua Two-Pass CCL (không gọi `two_pass_ccl_scratch`, `ccl_ms == 0.0`) mà vẫn
+      nhận diện đúng 100% đáp án.
+    - Khi truyền tường minh `run_ccl=False` (kể cả không có `question_grid` hoặc bật benchmark),
+      CCL cũng được bỏ qua.
+    - Khi truyền tường minh `run_ccl=True`, CCL vẫn chạy bình thường.
+    """
+    import src.tv3_segmentation as tv3_seg
+
+    sheet_gray, gt_answers, _, grid_rois = synthetic_ds01_clean
+    ccl_calls = {"count": 0}
+    orig_ccl = tv3_seg.two_pass_ccl_scratch
+
+    def spy_ccl(*args, **kwargs):
+        ccl_calls["count"] += 1
+        return orig_ccl(*args, **kwargs)
+
+    monkeypatch.setattr(tv3_seg, "two_pass_ccl_scratch", spy_ccl)
+    pipeline = TV3SegmentationPipeline(TV3PipelineConfig(threshold_method="adaptive"))
+
+    # 1. Mặc định (run_ccl=None) + có sẵn question_grid + run_opencv_benchmark=False -> bỏ qua CCL
+    res_skip = pipeline.run(sheet_gray, question_grid=grid_rois, run_opencv_benchmark=False)
+    assert ccl_calls["count"] == 0
+    assert res_skip.latency_ms["ccl_ms"] == 0.0
+    assert res_skip.num_components == 0
+    assert res_skip.raw_stats == []
+    assert res_skip.filtered_bubble_stats == []
+    assert res_skip.labels.shape == sheet_gray.shape
+    assert np.all(res_skip.labels == 0)
+    assert res_skip.get_answer_vector() == gt_answers
+
+    # 2. Chế độ OpenCV với question_grid và run_opencv_benchmark=False -> cũng bỏ qua CCL
+    res_skip_cv = pipeline.run(
+        sheet_gray,
+        question_grid=grid_rois,
+        run_opencv_benchmark=False,
+        execution_mode="opencv",
+    )
+    assert res_skip_cv.latency_ms["ccl_ms"] == 0.0
+    assert res_skip_cv.num_components == 0
+    assert res_skip_cv.get_answer_vector() == gt_answers
+
+    # 3. Truyền tường minh run_ccl=False khi bật benchmark hoặc không truyền grid -> vẫn bỏ qua CCL
+    res_force_off = pipeline.run(sheet_gray, question_grid=grid_rois, run_opencv_benchmark=True, run_ccl=False)
+    assert ccl_calls["count"] == 0
+    assert res_force_off.latency_ms["ccl_ms"] == 0.0
+    assert res_force_off.benchmark_opencv is not None
+    assert res_force_off.benchmark_opencv["ccl_count_match"] is True
+
+    # 4. Truyền tường minh run_ccl=True dù có sẵn question_grid -> chạy CCL bình thường
+    res_force_on = pipeline.run(sheet_gray, question_grid=grid_rois, run_opencv_benchmark=False, run_ccl=True)
+    assert ccl_calls["count"] == 1
+    assert res_force_on.num_components > 0
+    assert len(res_force_on.raw_stats) == res_force_on.num_components
+    assert res_force_on.get_answer_vector() == gt_answers
+
+
